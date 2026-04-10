@@ -20,7 +20,7 @@ class SanmingGame:
         self.player_melds: List[List[Tile]] = []
         self.ai_melds: List[List[List[Tile]]] = [[], [], []]
         self.discards: List[Tile] = []
-        self.is_dealer: bool = True
+        self.dealer_idx: int = 0
         self.consecutive_dealer: int = 0
         self.current_turn: int = 0
         self.game_running: bool = False
@@ -62,7 +62,7 @@ class SanmingGame:
         self._main_play_loop()
         self._phase_settlement()
 
-    def _init_round(self):
+    def _init_round(self) -> None:
         self.deck = Deck()
         self.player_hand = []
         self.ai_hands = [[], [], []]
@@ -70,28 +70,24 @@ class SanmingGame:
         self.ai_flowers = [[], [], []]
         self.player_melds = []
         self.ai_melds = [[], [], []]
+        self.discards = []
+        self.current_turn = self.dealer_idx  # 🎯 强绑定：庄家永远先手
         self.post_meld_state = None
         self.is_meld_active = False
-        self.discards = []
-        self.current_turn = 0
         self.last_drawn = None
-        console.print("🔄 新一局开始...")
+        console.print("🔄 新一局开始，发牌中...")
 
     def _phase_deal(self):
-        # 确定庄家索引：0=玩家，1=AI1（固定座位简化）
-        dealer_idx = 0 if self.is_dealer else 1
-        self.current_turn = dealer_idx
-
-        # 庄家17张，闲家16张
         hands = [[], [], [], []]
         for i in range(4):
-            count = 17 if i == dealer_idx else 16
+            count = 17 if i == self.dealer_idx else 16
             for _ in range(count):
                 t = self.deck.draw()
                 if t: hands[i].append(t)
-
+                
         self.player_hand = hands[0]
         self.ai_hands = hands[1:]
+        self.current_turn = self.dealer_idx
 
     def _phase_initial_flowers(self):
         console.print("🌸 开局集中补花...")
@@ -112,13 +108,13 @@ class SanmingGame:
         jin = self.rule.jin_tile
         hands = [self.player_hand] + self.ai_hands
 
-        # 1. 🔑 开局专属：抢金判定（仅此时 can_qiang_jin=True）
+        # 1. 开局专属：抢金判定
         if jin:
             for i, h in enumerate(hands):
-                # 模拟拿进翻出的金牌是否胡牌
-                res = self.rule.resolve_win(h + [jin], jin, i == 0, False, num_melds=0, can_qiang_jin=True)
+                is_dealer_for_i = (i == self.dealer_idx)  # ✅ 动态判断当前座位是否为庄家
+                res = self.rule.resolve_win(h + [jin], jin, is_dealer_for_i, False, num_melds=0, can_qiang_jin=True)
                 if res["type"] in ("庄家抢金", "闲家抢金"):
-                    h.append(jin)  # 金牌实际加入手牌
+                    h.append(jin)
                     self._declare_win(i, res, is_zimo=False)
                     return True
 
@@ -128,62 +124,63 @@ class SanmingGame:
                 self._declare_win(i, {"type":"三金倒","priority":9,"special_score":40,"is_pinghu":False}, False)
                 return True
 
-        # 3. 天胡检测 (庄家)
-        if self.is_dealer:
-            res = self.rule.resolve_win(self.player_hand, None, True, False, num_melds=0)
-            if res["type"] == "天胡":
-                self._declare_win(0, res, False)
-                return True
+        # 3. 天胡检测（仅检查庄家座位）
+        dealer_hand = hands[self.dealer_idx]
+        res = self.rule.resolve_win(dealer_hand, None, True, False, num_melds=0, can_qiang_jin=False)
+        if res["type"] == "天胡":
+            self._declare_win(self.dealer_idx, res, False)
+            return True
 
         return False
 
     def _main_play_loop(self):
-        is_first_action = True  # 🚦 标记本局是否还未有人执行过出牌
+        dealer_skip_done = False  # 🆕 本局专属标记，替代脆弱的 is_first_action
         while self.deck.remaining >= 20 and self.game_running:
             p_idx = self.current_turn
             hand = self.player_hand if p_idx == 0 else self.ai_hands[p_idx - 1]
 
-            # 🃏 摸牌阶段逻辑
+            # 🃏 摸牌逻辑：仅庄家首轮跳过，其余严格按状态机执行
             should_draw = True
-            if is_first_action:
-                # 首手判定：庄家不摸牌直接打，闲家需先摸牌至17张
-                is_dealer_turn = (self.is_dealer and p_idx == 0) or (not self.is_dealer and p_idx == 1)
-                if is_dealer_turn:
-                    should_draw = False
-                is_first_action = False  # 第一人行动后，解除首手限制
+            if not dealer_skip_done and p_idx == self.dealer_idx:
+                should_draw = False
+                dealer_skip_done = True  # ✅ 庄家首轮行动后，标记解除，后续正常摸牌
 
             if should_draw:
                 if self.post_meld_state == "chi_pong":
-                    pass  # 吃/碰后跳过摸牌
+                    pass  # 吃碰后跳过摸牌
                 elif self.post_meld_state == "draw_kong":
                     self._draw_kong_tile(p_idx)
                     self.post_meld_state = None
                 else:
                     self._draw_and_handle_flowers(p_idx)
 
+            # 🎨 渲染 UI
             clear_screen()
             self._render_screen()
+            is_dealer_turn = (p_idx == self.dealer_idx)
             console.print(f"[dim]手牌: {len(hand)}张 | 角色: {'庄家' if is_dealer_turn else '闲家'}[/dim]")
             console.print()
 
+            # ⚙️ 回合行动
             if p_idx == 0:
                 if not self._player_turn(hand): return
             else:
                 self._ai_turn(hand, p_idx)
                 if not self.game_running: return
 
-            # 清理同步状态 & 轮转
+            # 🔄 清理状态 & 轮转
             self.is_meld_active = False
             self.current_turn = (self.current_turn + 1) % 4
             time.sleep(0.4)
 
-        # 流局处理
+        # 🏁 荒庄流局处理
         console.print("\n⏳ 牌墙剩20张，分张流局。")
         for _ in range(5):
-            for h in [self.player_hand]+self.ai_hands:
+            for h in [self.player_hand] + self.ai_hands:
                 t = self.deck.draw()
                 if t: h.append(t)
-        self.is_dealer = False; self.consecutive_dealer = 0
+        self.consecutive_dealer += 1
+        console.print(f"👑 荒庄流局，庄家(座位{self.dealer_idx})连庄！")
 
     def _draw_with_flower_replacement(self, p_idx: int, hand: List[Tile]):
         tile = self.deck.draw()
@@ -217,7 +214,7 @@ class SanmingGame:
 
         # 自摸检测
         num_m = len(self.player_melds)
-        res = self.rule.resolve_win(hand, hand[-1] if hand else None, self.is_dealer, True, num_melds=num_m)
+        res = self.rule.resolve_win(hand, hand[-1] if hand else None, (0 == self.dealer_idx), True, num_melds=num_m)
         if res["priority"] > 0:
             self._declare_win(0, res, True); self.game_running = False; return False
 
@@ -308,7 +305,7 @@ class SanmingGame:
 
         # AI 正常出牌
         num_m = len(self.ai_melds[p_idx-1])
-        res = self.rule.resolve_win(hand, hand[-1] if hand else None, False, True, num_melds=num_m)
+        res = self.rule.resolve_win(hand, hand[-1] if hand else None, (p_idx == self.dealer_idx), True, num_melds=num_m)
         if res["priority"] > 0:
             clear_screen(); self._render_screen()
             console.print(f"\n🤖 AI{p_idx} 自摸胡牌! 类型: {res['type']}")
@@ -416,7 +413,7 @@ class SanmingGame:
                 chosen = valid_opts[val-1]
                 if chosen["type"] == "胡":
                     win_res = self.rule.resolve_win(self.player_hand + [discard], discard, 
-                                                    self.is_dealer, False, num_melds=num_m)
+                                                    (0 == self.dealer_idx), False, num_melds=num_m)
                     if win_res["priority"] > 0:
                         self.player_hand.append(discard)
                         self._declare_win(0, win_res, False)
@@ -467,7 +464,7 @@ class SanmingGame:
         if chosen:
             combo_idx = 0
             if chosen["type"] == "胡":
-                win_res = self.rule.resolve_win(hand + [discard], discard, False, False, num_melds=num_m)
+                win_res = self.rule.resolve_win(hand + [discard], discard, (p_idx == self.dealer_idx), False, num_melds=num_m)
                 if win_res["priority"] > 0:
                     hand.append(discard)
                     self._declare_win(p_idx, win_res, False)
@@ -518,50 +515,6 @@ class SanmingGame:
         except ValueError:
             console.print("[red]❌ 输入无效，跳过[/red]")
 
-    def _check_melds_for_discard(self, discard: Tile, discarder_idx: int):
-        """动态鸣牌拦截菜单（严格对齐规则引擎返回结果）"""
-        # 仅拦截玩家（下家）
-        if (discarder_idx + 1) % 4 != 0: return
-        
-        hand = self.player_hand
-        actions = self.rule.check_meld_options(hand, discard, is_next_player=True)
-        if actions == ["过"]: return
-
-        console.print(f"\n⚡ 拦截 {discard.name} | 可选: {' / '.join(actions)}")
-        # 动态生成序号菜单
-        menu = {str(i+1): act for i, act in enumerate(actions)}
-        console.print("  ".join(f"{k}.{v}" for k, v in menu.items()))
-        
-        try:
-            val = console.input("👉 选择: ").strip()
-            act = menu.get(val, "过")
-        except: act = "过"
-
-        if act == "过":
-            console.print("⏭️ 放弃拦截")
-            return
-
-        # 执行拦截
-        success = self.rule.execute_meld(hand, act, discard)
-        if not success:
-            console.print("[red]❌ 条件不足，视为过。[/red]")
-            return
-
-        if act == "胡":
-            # 二次严格校验，防止引擎边界漏洞
-            res = self.rule.resolve_win(hand, discard, self.is_dealer, False)
-            if res["priority"] > 0:
-                self._declare_win(0, res, False)
-                self.game_running = False
-            else:
-                console.print("[red]❌ 实际未达成胡牌，回滚视为过。[/red]")
-                hand.pop()  # 安全回滚
-        else:
-            console.print(f"✅ 成功执行: {act}")
-            # 鸣牌后跳过摸牌，直接进玩家出牌回合
-            self.current_turn = 0
-            self._player_turn(hand)
-
     def _declare_win(self, p_idx: int, win_info: Dict, is_zimo: bool):
         hand = self.player_hand if p_idx==0 else self.ai_hands[p_idx-1]
         flw = self.player_flowers if p_idx==0 else self.ai_flowers[p_idx-1]
@@ -570,8 +523,14 @@ class SanmingGame:
                                           dealer_bonus=self.consecutive_dealer, is_self_draw=is_zimo)
         name = "你" if p_idx==0 else f"AI{p_idx}"
         console.print(f"\n🎉 [bold green]{name} 胡牌![/bold green] [{win_info['type']}] 得分: {score}")
-        if p_idx==0: self.consecutive_dealer += 1
-        else: self.is_dealer=False; self.consecutive_dealer=0
+        
+        if p_idx == self.dealer_idx:
+            self.consecutive_dealer += 1
+            console.print(f"👑 庄家连庄！当前连庄数: {self.consecutive_dealer}")
+        else:
+            self.dealer_idx = (self.dealer_idx + 1) % 4  # 庄家下台，顺时针轮换
+            self.consecutive_dealer = 0
+            console.print("🔄 庄家轮换至下家。")
 
     def _phase_settlement(self):
         console.print("\n📊 结算完毕。按 Enter 继续..."); console.input()
@@ -579,11 +538,12 @@ class SanmingGame:
 
     def _render_screen(self):
         jin = self.rule.jin_tile.name if self.rule.jin_tile else "未开"
-        console.print(render_status(self.deck.remaining, jin, self.current_turn+1, self.is_dealer))
+        is_dealer = (self.current_turn == self.dealer_idx)
+        console.print(render_status(self.deck.remaining, jin, self.current_turn + 1, is_dealer))
         console.print(render_river(self.discards))
         console.print(render_hand(self.player_hand, jin))
         console.print(render_flowers(self.player_flowers))
-        console.print(render_melds(self.player_melds)) # ✅ 新增副露区
+        console.print(render_melds(self.player_melds))
 
 if __name__ == "__main__":
     import sys
