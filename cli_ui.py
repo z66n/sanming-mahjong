@@ -81,5 +81,41 @@ def render_status(deck_rem: int, jin_name: str, turn: int, dealer: bool) -> Pane
     info.append(f"  |  金: {jin_name or '待定'}")
     return Panel(info, title="📊 状态", border_style="yellow")
 
+def render_reveal_hand(hand: List[Tile], jin_name: Optional[str] = None, title: str = "手牌") -> Panel:
+    """渲染摊牌面板（带完整排序与花色背景）"""
+    s = _sort_tiles(hand, jin_name)
+    content = "  ".join(f"[{_get_tile_bg_style(t, jin_name or '')}]{t.name}[/]" for t in s)
+    return Panel(content, title=title, border_style="cyan", padding=(0, 1))
+
+def render_game_log(logs: List[str], max_lines: int = 12) -> Panel:
+    """渲染游戏日志面板（最新在底部，自动滚动）"""
+    if not logs:
+        return Panel("[dim]等待游戏开始...[/dim]", title="📜 事件日志", border_style="grey50")
+    
+    # 截取最新 N 条
+    recent_logs = logs[-max_lines:]
+    text = Text()
+    
+    for i, log in enumerate(recent_logs):
+        # 智能着色：根据日志关键词
+        if "胡牌" in log or "天胡" in log or "抢金" in log:
+            style = "bold green"
+        elif "杠" in log:
+            style = "bold yellow"
+        elif "碰" in log or "吃" in log:
+            style = "cyan"
+        elif "打出" in log or "过" in log:
+            style = "dim"
+        elif "庄家" in log or "连庄" in log:
+            style = "bold magenta"
+        elif "摸到" in log or "补花" in log:
+            style = "blue"
+        else:
+            style = "white"
+        
+        text.append(log + "\n", style=style)
+    
+    return Panel(text, title="📜 事件日志", border_style="grey50", padding=(0, 1))
+
 __all__ = ["clear_screen", "render_discard_prompt", "render_hand", "render_river", 
-           "render_status", "render_flowers", "render_melds", "_sort_tiles"]
+           "render_status", "render_flowers", "render_melds", "_sort_tiles", "render_reveal_hand", "render_game_log"]
