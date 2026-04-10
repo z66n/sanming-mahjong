@@ -71,10 +71,9 @@ def render_melds(melds: List[List[Tile]], title: str = "🀂 副露区") -> Pane
         return Panel("暂无副露", title=title, border_style="grey50")
     rows = []
     for group in melds:
-        g_type = "吃" if len(group)==3 and group[0].category=="suited" else ("暗杠" if len(group)==4 else "碰/明杠")
-        row = f"[{g_type}] " + "  ".join(f"[{t.name}]" for t in group)
+        row = "  ".join(f"[on grey23]{t.name}[/]" for t in group)
         rows.append(row)
-    return Panel("\n".join(rows), title=title, border_style="grey50")
+    return Panel("  |  ".join(rows), title=title, border_style="grey50")
 
 def render_status(deck_rem: int, jin_name: str, turn: int, dealer: bool) -> Panel:
     info = Text(f"回合: {turn}  |  墙余: {deck_rem}  |  ")

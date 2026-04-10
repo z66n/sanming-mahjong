@@ -241,7 +241,7 @@ class SanmingGame:
                 self.discards.append(target)
                 
                 # 打出后立即触发拦截，拦截流会自动控制 skip_turn_increment
-                self._handle_discard_interception(target, 0)
+                self._handle_global_interception(target, 0)
                 return True
             console.print("[red]❌ 序号超出范围[/red]"); return True
         except ValueError:
@@ -322,7 +322,7 @@ class SanmingGame:
             
         clear_screen(); self._render_screen()
         console.print(f"🤖 AI{p_idx} 打出: {out.name if out else '???'}")
-        self._handle_discard_interception(out, p_idx)
+        self._handle_global_interception(out, p_idx)
     
     def _draw_and_handle_flowers(self, p_idx: int):
         """摸牌及自动补花循环（活墙抽牌 → 遇花去死墙补 → 递归至非花）"""
@@ -369,84 +369,114 @@ class SanmingGame:
         self.last_drawn = None  # 吃碰后新牌标记清除
         return True
     
-    def _handle_discard_interception(self, discard: Tile, discarder_idx: int):
-        """全局优先级拦截链：支持玩家与AI，支持连吃连碰"""
-        # 按座位顺序检查 +1, +2, +3 家
-        for i in range(1, 4):
-            p_idx = (discarder_idx + i) % 4
-            hand = self.player_hand if p_idx == 0 else self.ai_hands[p_idx-1]
-            num_m = len(self.player_melds) if p_idx == 0 else len(self.ai_melds[p_idx-1])
-            is_next = (i == 1)
-
-            opts = self.rule.check_meld_options(hand, discard, is_next, num_melds=num_m)
-            if not opts or opts == [{"type": "过"}]: continue
-
-            high_opts = [o for o in opts if o["type"] in ("胡", "明杠", "碰")]
-            chosen_act, combo_idx = None, -1
-
-            # 🔝 1. 处理高优先级 (胡/杠/碰)
-            if high_opts:
-                if p_idx == 0:
-                    chosen_act, combo_idx = self._player_choose_meld(high_opts, discard)
-                else:
-                    chosen_act, combo_idx = self._ai_choose_meld(high_opts, discard, p_idx)
-                    
-                if chosen_act and chosen_act != "过":
-                    if chosen_act == "胡":
-                        win_res = self.rule.resolve_win(hand + [discard], discard, 
-                                                        p_idx==0, False, num_melds=num_m)
-                        if win_res["priority"] > 0:
-                            hand.append(discard)
-                            self._declare_win(p_idx, win_res, False)
-                            self.game_running = False
-                            return
-                    elif self._execute_meld_flow(p_idx, discard, {"type": chosen_act}):
-                        if p_idx == 0:
-                            self.is_meld_active = True
-                            self._prompt_discard_synchronous()
-                        else:
-                            self._ai_discard_after_meld(p_idx)
-                        return  # 拦截成功，终止后续检查
-
-            # 🟢 2. 处理吃牌 (仅下家 i==1)
-            if is_next:
-                chi_opts = [o for o in opts if o["type"] == "吃"]
-                if chi_opts:
-                    if p_idx == 0:
-                        chosen_act, combo_idx = self._player_choose_meld(chi_opts, discard)
-                    else:
-                        chosen_act, combo_idx = self._ai_choose_meld(chi_opts, discard, p_idx)
-                        
-                    if chosen_act == "吃" and self._execute_meld_flow(p_idx, discard, chi_opts[0], combo_idx):
-                        if p_idx == 0:
-                            self.is_meld_active = True
-                            self._prompt_discard_synchronous()
-                        else:
-                            self._ai_discard_after_meld(p_idx)
-                        return
-                    
-    def _player_choose_meld(self, opts: List[Dict], discard: Tile) -> Tuple[Optional[str], int]:
-        menu = " / ".join(o["type"] for o in opts)
-        console.print(f"\n⚡ 可拦截 {discard.name} | {menu} / 过")
-        console.print("  ".join(f"{i+1}.{o['type']}" for i, o in enumerate(opts)) + f"  {len(opts)+1}.过")
+    def _handle_global_interception(self, discard: Tile, discarder_idx: int):
+        # 🌍 全局优先级扫描：胡 > 明杠 > 碰 > 吃
+        # 同一优先级按座位顺序 (+1, +2, +3) 判定，先匹配到者直接获得拦截权
+        priority_types = ["胡", "明杠", "碰", "吃"]
+        winner_idx = -1
         
+        for act_type in priority_types:
+            for i in range(1, 4):
+                p_idx = (discarder_idx + i) % 4
+                hand = self.player_hand if p_idx == 0 else self.ai_hands[p_idx-1]
+                num_m = len(self.player_melds) if p_idx == 0 else len(self.ai_melds[p_idx-1])
+                is_next = (i == 1)
+                
+                opts = self.rule.check_meld_options(hand, discard, is_next, num_melds=num_m)
+                if any(o["type"] == act_type for o in opts):
+                    winner_idx = p_idx
+                    break
+            if winner_idx != -1: break
+
+        if winner_idx == -1: return  # 无人拦截
+
+        # 🎯 仅触发赢家逻辑，其他玩家自动跳过（优先级规则生效）
+        if winner_idx == 0:
+            self._player_intercept_prompt(discard, discarder_idx)
+        else:
+            self._ai_intercept_execute(winner_idx, discard, discarder_idx) 
+
+    def _player_intercept_prompt(self, discard: Tile, discarder_idx: int):
+        """赢家统一菜单：显示所有可用操作，按优先级排序"""
+        num_m = len(self.player_melds)
+        is_next = (discarder_idx + 1) % 4 == 0
+        all_opts = self.rule.check_meld_options(self.player_hand, discard, is_next, num_melds=num_m)
+        valid_opts = [o for o in all_opts if o["type"] in ("胡", "明杠", "碰", "吃")]
+        
+        if not valid_opts: return
+
+        # 构建菜单：1.胡 2.明杠 3.碰 4.吃 5.过（动态过滤不可用项）
+        menu_str = " / ".join(o["type"] for o in valid_opts)
+        console.print(f"\n⚡ 拦截权归属你 | 可选: {menu_str} / 过")
+        console.print("  ".join(f"{i+1}.{o['type']}" for i, o in enumerate(valid_opts)) + f"  {len(valid_opts)+1}.过")
+
         try:
             val = int(console.input("👉 选择: ").strip())
-            if 1 <= val <= len(opts): return opts[val-1]["type"], 0
-            return None, -1
+            if 1 <= val <= len(valid_opts):
+                chosen = valid_opts[val-1]
+                if chosen["type"] == "胡":
+                    win_res = self.rule.resolve_win(self.player_hand + [discard], discard, 
+                                                    self.is_dealer, False, num_melds=num_m)
+                    if win_res["priority"] > 0:
+                        self.player_hand.append(discard)
+                        self._declare_win(0, win_res, False)
+                        self.game_running = False
+                        return
+                    else:
+                        console.print("[red]❌ 实际未满足胡牌条件，视为过。[/red]")
+                        return
+                        
+                elif chosen["type"] == "吃":
+                    # 吃牌多选分支
+                    combos = chosen["combos"]
+                    if len(combos) > 1:
+                        console.print(f"🍜 选择吃牌组合:")
+                        for i, c in enumerate(combos): console.print(f"  {i+1}. {c[0]}+{c[1]}")
+                        c_val = int(console.input("👉 组合序号: ").strip()) - 1
+                        combo_idx = c_val if 0 <= c_val < len(combos) else 0
+                    else: combo_idx = 0
+                    
+                    if self._execute_meld_flow(0, discard, chosen, combo_idx):
+                        self.is_meld_active = True
+                        self._prompt_discard_synchronous()
+                else:
+                    if self._execute_meld_flow(0, discard, chosen):
+                        if chosen["type"] in ("吃", "碰"):
+                            self.is_meld_active = True
+                            self._prompt_discard_synchronous()
+                        elif chosen["type"] == "明杠":
+                            self.post_meld_state = "draw_kong"
+                return
+            else:
+                console.print("⏭️ 选择过，继续流程")
         except ValueError:
-            return None, -1
+            console.print("[red]❌ 输入无效，视为过[/red]")
         
-    def _ai_choose_meld(self, opts: List[Dict], discard: Tile, p_idx: int) -> Tuple[Optional[str], int]:
-        """AI 自动决策吃碰杠"""
-        if not opts: return None, -1
-        act_type = opts[0]["type"]
+    def _ai_intercept_execute(self, p_idx: int, discard: Tile, discarder_idx: int):
+        """AI 赢家自动决策并执行"""
+        hand = self.ai_hands[p_idx-1]
+        num_m = len(self.ai_melds[p_idx-1])
+        is_next = (p_idx == (discarder_idx + 1) % 4)  # ✅ 现在已定义
+        opts = self.rule.check_meld_options(hand, discard, is_next, num_melds=num_m)
+        valid_opts = [o for o in opts if o["type"] in ("胡", "明杠", "碰", "吃")]
+        if not valid_opts: return
+
+        act_probs = {"胡": 1.0, "明杠": 1.0, "碰": 0.7, "吃": 0.5}
+        chosen = next((o for o in valid_opts if random.random() < act_probs.get(o["type"], 0)), None)
         
-        # AI 策略：胡/杠必拿，碰拿70%，吃拿50%或听牌倾向
-        take_prob = {"胡": 1.0, "明杠": 1.0, "碰": 0.7, "吃": 0.5}.get(act_type, 0)
-        if random.random() < take_prob:
-            return act_type, 0
-        return None, -1
+        if chosen:
+            combo_idx = 0
+            if chosen["type"] == "胡":
+                win_res = self.rule.resolve_win(hand + [discard], discard, False, False, num_melds=num_m)
+                if win_res["priority"] > 0:
+                    hand.append(discard)
+                    self._declare_win(p_idx, win_res, False)
+                    self.game_running = False
+                    return
+            elif chosen["type"] == "吃":
+                combo_idx = 0
+            elif self._execute_meld_flow(p_idx, discard, chosen, combo_idx):
+                self._ai_discard_after_meld(p_idx)
 
     def _ai_discard_after_meld(self, p_idx: int):
         """AI 吃/碰成功后，立即从14张手牌中打出一张"""
@@ -460,7 +490,7 @@ class SanmingGame:
             self.discards.append(out_tile)
             console.print(f"🤖 AI{p_idx} {out_tile.name} (吃碰后跟打)")
             # 🔄 递归检查新打出的牌是否被拦截
-            self._handle_discard_interception(out_tile, p_idx)
+            self._handle_global_interception(out_tile, p_idx)
 
     def _prompt_discard_synchronous(self):
         """吃/碰成功后，立即从14张手牌中打出一张（同步阻塞）"""
@@ -482,7 +512,7 @@ class SanmingGame:
                 self._render_screen()
                 console.print(f"🗑️ 你打出: {target.name}")
                 # 打出后继续检查是否有其他人可拦截
-                self._handle_discard_interception(target, 0)
+                self._handle_global_interception(target, 0)
             else:
                 console.print("[red]❌ 序号无效，默认跳过[/red]")
         except ValueError:
