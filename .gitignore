@@ -1,0 +1,5 @@
+.venv/
+test*
+demo*
+assets/
+__pycache__/
