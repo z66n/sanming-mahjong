@@ -181,33 +181,24 @@ class SanmingGame:
                 self.current_turn = (self.current_turn + 1) % 4
             
             time.sleep(0.4)
-
-        # 🏁 荒庄流局处理
-        self._add_log("\n⏳ 牌墙剩20张，分张流局。")
-        for _ in range(1):
-            for h in [self.player_hand] + self.ai_hands:
-                t = self.deck.draw()
-                if t: h.append(t)
-        self.consecutive_dealer += 1
-        self._add_log(f"👑 荒庄流局，庄家(座位{self.dealer_idx})连庄！")
     
     def _phase_final_draw(self):
         """🀄 分张阶段：剩20张时，每人依次摸1张，可自摸，不可出牌"""
         self._add_log("⏳ 牌墙剩20张，进入分张阶段（每人限摸1张，不可出牌）...")
-        clear_screen()
-        self._render_screen()
+        clear_screen(); self._render_screen()
 
         for _ in range(4):
             p_idx = self.current_turn
             hand = self.player_hand if p_idx == 0 else self.ai_hands[p_idx - 1]
             flw_list = self.player_flowers if p_idx == 0 else self.ai_flowers[p_idx - 1]
+            name = '你' if p_idx==0 else f'AI{p_idx}'
 
             # 1. 摸牌 & 自动补花循环
             tile = self.deck.draw()
-            self._add_log(f"📥 {'你' if p_idx==0 else f'AI{p_idx}'} 分张")
+            self._add_log(f"📥 {name} 分张")
             while tile and tile.name in HONOR_FLOWER_NAMES:
                 flw_list.append(tile)
-                self._add_log(f"🌸 {'你' if p_idx==0 else f'AI{p_idx}'} 分张补花")
+                self._add_log(f"🌸 {name} 分张补花")
                 tile = self.deck.draw()
 
             if not tile:
@@ -223,8 +214,8 @@ class SanmingGame:
             res = self.rule.resolve_win(hand, tile, is_dealer, True, num_melds=num_m)
 
             if res["priority"] > 0:
+                self._add_log(f"🎉 {name} 分张自摸！")
                 clear_screen(); self._render_screen()
-                self._add_log(f"🎉 {'你' if p_idx==0 else f'AI{p_idx}'} 分张自摸！")
                 self._declare_win(p_idx, res, is_zimo=True)
                 return  # 🎯 有人胡牌，直接终止分张并结算
 
@@ -234,7 +225,8 @@ class SanmingGame:
             self.current_turn = (self.current_turn + 1) % 4
 
         # 4. 四人全部分完，无人胡牌 → 荒庄流局
-        self._add_log("🏁 分张完毕无人胡牌，荒庄流局。")
+        self._add_log(f"🏁 分张完毕无人胡牌，荒庄流局，庄家连庄！")
+        clear_screen(); self._render_screen()
         self.consecutive_dealer += 1
         self._show_round_end_reveal()
         self._phase_settlement()
@@ -651,7 +643,7 @@ class SanmingGame:
             ))
 
     def _phase_settlement(self):
-        console.print("\n📊 结算完毕。按 Enter 继续..."); console.input()
+        console.print("\n📊 结算完毕。按 Enter 继续，按 Ctrl+C 退出..."); console.input()
         self.game_running = True
 
     def _render_screen(self):
