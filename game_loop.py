@@ -41,7 +41,7 @@ class SanmingGame:
             self.game_log = self.game_log[-50:]
 
     def start_game(self):
-        console.print("[bold cyan]🀄 福州三明十六张麻将 v0.1.0[/bold cyan]")
+        console.print("[bold cyan]🧧 福州三明十六张麻将 v0.1.4[/bold cyan]")
         self.game_running = True
         while self.game_running:
             try: self._run_round()
@@ -122,31 +122,19 @@ class SanmingGame:
 
     def _check_special_initial_wins(self) -> bool:
         jin = self.rule.jin_tile
+        if not jin: return False
+
         hands = [self.player_hand] + self.ai_hands
-
-        # 1. 开局专属：抢金判定
-        if jin:
-            for i, h in enumerate(hands):
-                is_dealer_for_i = (i == self.dealer_idx)  # ✅ 动态判断当前座位是否为庄家
-                res = self.rule.resolve_win(h + [jin], jin, is_dealer_for_i, False, num_melds=0, can_qiang_jin=True)
-                if res["type"] in ("庄家抢金", "闲家抢金"):
-                    h.append(jin)
-                    self._declare_win(i, res, is_zimo=False)
-                    return True
-
-        # 2. 三金倒检测
         for i, h in enumerate(hands):
-            if sum(1 for t in h if self.rule.is_joker(t)) >= 3:
-                self._declare_win(i, {"type":"三金倒","priority":9,"special_score":40,"is_pinghu":False}, False)
+            res = self.rule.check_initial_special_wins(h, i, self.dealer_idx, jin)
+            if res["type"] != "无":
+                # 🎯 核心修正：仅抢金允许将翻出的金纳入手牌，天胡/三金倒保持发牌原貌
+                if "抢金" in res["type"]:
+                    h.append(jin)
+                    
+                # 开局特殊胜利统一按高倍率结算（is_zimo=True 触发 ×2 倍率，可按需调整）
+                self._declare_win(i, res, is_zimo=True)
                 return True
-
-        # 3. 天胡检测（仅检查庄家座位）
-        dealer_hand = hands[self.dealer_idx]
-        res = self.rule.resolve_win(dealer_hand, None, True, False, num_melds=0, can_qiang_jin=False)
-        if res["type"] == "天胡":
-            self._declare_win(self.dealer_idx, res, False)
-            return True
-
         return False
 
     def _main_play_loop(self):
@@ -168,11 +156,7 @@ class SanmingGame:
                     self._draw_and_handle_flowers(p_idx)
 
             # 🎨 渲染 UI
-            clear_screen()
-            self._render_screen()
-            is_dealer_turn = (p_idx == self.dealer_idx)
-            console.print(f"[dim]手牌: {len(hand)}张 | 角色: {'庄家' if is_dealer_turn else '闲家'}[/dim]")
-            console.print()
+            clear_screen(); self._render_screen()
 
             # ⚙️ 回合行动
             if p_idx == 0:
@@ -244,12 +228,9 @@ class SanmingGame:
                 self.player_hand.remove(target)
                 self.last_drawn = None
                 self.discards.append(target)
-                self._add_log(f"🗑️ 你打出: {target.name}")
-                
+                self._add_log(f"📤 你打出: {target.name}")
                 # ✅ 立即清屏并刷新，让玩家直观看到手牌减少
-                clear_screen()
-                self._render_screen()                
-                
+                clear_screen(); self._render_screen()                
                 # 触发拦截
                 self._handle_global_interception(target, 0)
                 return True
@@ -303,25 +284,28 @@ class SanmingGame:
         # AI 暗杠检测
         an_gangs = self.rule.check_an_gang(hand)
         if an_gangs:
-            # AI 随机决定是否暗杠 (50%概率)
+            # 50%概率暗杠
             if random.random() > 0.5:
                 g_name = random.choice(an_gangs)
                 removed = []
                 for _ in range(4):
-                    for t in hand:
-                        if t.name == g_name: hand.remove(t); removed.append(t); break
+                    for t in list(hand):
+                        if t.name == g_name:
+                            hand.remove(t); removed.append(t); break
                 self.ai_melds[p_idx-1].append(removed)
                 self._add_log(f"🤖 AI{p_idx} 暗杠")
-                new_t = self.deck.draw_from_dead()
-                if new_t: hand.append(new_t)
-                return
+                
+                # 🆕 暗杠后必须同步执行：补死墙牌 → 立即出牌 → 设置下家
+                self._draw_kong_tile(p_idx)
+                self._ai_discard_after_meld(p_idx)
+                # next_turn_override 已在 _ai_discard_after_meld 中设置
+                return  # 🚫 阻断后续正常摸打逻辑，防止重复出牌
 
         # AI 正常出牌
         num_m = len(self.ai_melds[p_idx-1])
         res = self.rule.resolve_win(hand, hand[-1] if hand else None, (p_idx == self.dealer_idx), True, num_melds=num_m)
         if res["priority"] > 0:
             clear_screen(); self._render_screen()
-            self._add_log(f"\n🤖 AI{p_idx} 自摸胡牌! 类型: {res['type']}")
             self._declare_win(p_idx, res, True); self.game_running = False; return
 
         jin_name = self.rule.jin_tile.name if self.rule.jin_tile else ""
@@ -329,10 +313,9 @@ class SanmingGame:
         if out:
             hand.remove(out)
             self.discards.append(out)
-
-        self._add_log(f"🤖 AI{p_idx} 打出: {out.name if out else '???'}")    
-        clear_screen(); self._render_screen()
-        self._handle_global_interception(out, p_idx)
+            self._add_log(f"🤖 AI{p_idx} 打出: {out.name}")    
+            clear_screen(); self._render_screen()
+            self._handle_global_interception(out, p_idx)
     
     def _draw_and_handle_flowers(self, p_idx: int):
         """摸牌及自动补花循环（活墙抽牌 → 遇花去死墙补 → 递归至非花）"""
@@ -355,15 +338,23 @@ class SanmingGame:
         an_gangs = self.rule.check_an_gang(self.player_hand)
         if not an_gangs: return False
 
-        console.print(f"\n🔨 手牌已含暗杠: {' / '.join(an_gangs)}")
+        console.print(f"\n🔨 检测到可暗杠: {' / '.join(an_gangs)}")
+        # 🆕 构建数字菜单
+        menu_items = [f"[bold cyan]{i+1}. 暗杠 {name}[/]" for i, name in enumerate(an_gangs)]
+        menu_items.append(f"[dim]{len(an_gangs)+1}. 过[/]")
+        console.print("  ".join(menu_items))
+        
         try:
-            c = console.input("👉 输入牌名暗杠 / 任意键跳过: ").strip()
-            if c in an_gangs:
+            c = console.input("👉 选择序号: ").strip()
+            if c.lower() == 'q': self.game_running = False; return False
+            idx = int(c) - 1
+            if 0 <= idx < len(an_gangs):
+                chosen_name = an_gangs[idx]
                 # 1. 移除4张牌至副露区
                 removed = []
                 for _ in range(4):
-                    for t in self.player_hand:
-                        if t.name == c:
+                    for t in list(self.player_hand):  # list() 避免遍历中修改
+                        if t.name == chosen_name:
                             self.player_hand.remove(t)
                             removed.append(t)
                             break
@@ -372,6 +363,7 @@ class SanmingGame:
 
                 # 2. 🚨 立即从死墙补牌 + 递归补花
                 tile = self.deck.draw_from_dead()
+                self._add_log(f"📥 暗杠补牌")
                 while tile and tile.name in HONOR_FLOWER_NAMES:
                     self.player_flowers.append(tile)
                     self._add_log(f"🌸 补花")
@@ -380,16 +372,18 @@ class SanmingGame:
                 if tile:
                     self.player_hand.append(tile)
                     self.last_drawn = tile.name
-                    self._add_log(f"📥 暗杠补牌")
                 else:
                     self._add_log("⚠️ 死墙已空，暗杠后无牌可补")
 
-                # 3. 同步进入出牌阶段（内部已包含清屏、渲染、拦截链）
+                # 3. 同步进入出牌阶段
                 self._prompt_discard_synchronous()
                 return True
+            else:
+                console.print("⏭️ 选择过，继续流程")
+                return False
         except ValueError:
-            pass
-        return False
+            console.print("[red]❌ 输入无效，视为过[/red]")
+            return False
 
     def _execute_meld_flow(self, player_idx: int, discard: Tile, action_opt: Dict, combo_idx: int = -1) -> bool:
         hand = self.player_hand if player_idx == 0 else self.ai_hands[player_idx-1]
@@ -400,7 +394,7 @@ class SanmingGame:
         
         melds.append(group)
         self._add_log(f"✅ {'你' if player_idx==0 else f'AI{player_idx}'} 执行: {action_opt['type']}")
-        self.last_drawn = None  # 吃碰杠后新牌标记清除
+        self.last_drawn = None  # 鸣牌后新牌标记清除
         return True
     
     def _handle_global_interception(self, discard: Tile, discarder_idx: int):
@@ -526,7 +520,7 @@ class SanmingGame:
         if out_tile:
             hand.remove(out_tile)
             self.discards.append(out_tile)
-            self._add_log(f"🤖 AI{p_idx} {out_tile.name} (吃碰杠后跟打)")
+            self._add_log(f"🤖 AI{p_idx} {out_tile.name} (鸣牌后跟打)")
             clear_screen(); self._render_screen()
             # ✅ 预设下一回合为当前拦截者的下家
             self.next_turn_override = (p_idx + 1) % 4
@@ -549,10 +543,8 @@ class SanmingGame:
                 self.player_hand.remove(target)
                 self.last_drawn = None  # 清除新牌标记
                 self.discards.append(target)
-                console.print(f"🗑️ 你打出: {target.name}")
-                self._add_log(f"🗑️ 你打出: {target.name}")
-                clear_screen()
-                self._render_screen()
+                self._add_log(f"📤 你打出: {target.name}")
+                clear_screen(); self._render_screen()
                 # 打出后继续检查是否有其他人可拦截
                 # ✅ 预设下一回合为玩家的下一家(AI1)
                 self.next_turn_override = 1 
@@ -569,8 +561,14 @@ class SanmingGame:
         score = self.rule.calculate_score(hand, win_info, base=5, flower_pts=flw_pts,
                                           dealer_bonus=self.consecutive_dealer, is_self_draw=is_zimo)
         name = "你" if p_idx==0 else f"AI{p_idx}"
-        self._add_log(f"🎉 {name} {win_info['type']} 胡牌！得分: {score}")
-        console.print(f"\n🎉 [bold green]{name} 胡牌![/bold green] [{win_info['type']}] 得分: {score}")
+        base_type = win_info["type"]
+        if base_type in ("天胡", "三金倒", "庄家抢金", "闲家抢金"):
+            win_label = base_type
+        else:
+            win_label = f"{base_type} (自摸)" if is_zimo else f"{base_type} (点炮)"
+            
+        self._add_log(f"🎉 {name} {win_label} 胡牌！得分: {score}")
+        console.print(f"\n🎉 [bold green]{name} 胡牌![/bold green] [{win_label}] 得分: {score}")
         
         if p_idx == self.dealer_idx:
             self.consecutive_dealer += 1
@@ -582,13 +580,22 @@ class SanmingGame:
 
     def _show_round_end_reveal(self):
         """本局结束，展示所有玩家手牌"""
-        console.print("[bold yellow]🃏 本局结束，所有玩家摊牌：[/bold yellow]")
+        console.print("[bold yellow]🔚 本局结束，所有玩家摊牌：[/bold yellow]")
         jin_name = self.rule.jin_tile.name if self.rule.jin_tile else ""
         from cli_ui import render_reveal_hand
         
-        console.print(render_reveal_hand(self.player_hand, jin_name, "👤 你的手牌"))
+        # 👤 玩家摊牌：显示手牌+副露
+        console.print(render_reveal_hand(
+            self.player_hand, jin_name, f"👤 你的手牌 ({len(self.player_hand) + sum(len(group) for group in self.player_melds)}张, {len(self.player_flowers)}🌸)", 
+            melds=self.player_melds, hide_flowers=True
+        ))
+        
+        # 🤖 AI 摊牌：显示手牌+副露，花牌单独显示
         for i, ai_h in enumerate(self.ai_hands, 1):
-            console.print(render_reveal_hand(ai_h, jin_name, f"🤖 AI {i} 手牌"))
+            console.print(render_reveal_hand(
+                ai_h, jin_name, f"🤖 AI {i} 手牌 ({len(self.ai_hands[i-1]) + sum(len(group) for group in self.ai_melds[i-1])}张, {len(self.ai_flowers[i-1])}🌸)", 
+                melds=self.ai_melds[i-1], hide_flowers=True
+            ))
 
     def _phase_settlement(self):
         console.print("\n📊 结算完毕。按 Enter 继续..."); console.input()
@@ -596,10 +603,9 @@ class SanmingGame:
 
     def _render_screen(self):
         jin = self.rule.jin_tile.name if self.rule.jin_tile else "未开"
-        is_dealer = (self.current_turn == self.dealer_idx)
-        console.print(render_status(self.deck.remaining, jin, self.current_turn + 1, is_dealer))
+        console.print(render_status(self.deck.remaining, jin, self.current_turn, self.dealer_idx))
         console.print(render_river(self.discards))
-        console.print(render_game_log(self.game_log, max_lines=8))
+        console.print(render_game_log(self.game_log))
         console.print(render_hand(self.player_hand, jin))
         console.print(render_melds(self.player_melds))
         console.print(render_flowers(self.player_flowers))

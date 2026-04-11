@@ -54,7 +54,7 @@ def render_hand(hand: List[Tile], jin_name: Optional[str] = None) -> Panel:
     """手牌面板（无交互，仅展示）"""
     s = _sort_tiles(hand, jin_name)
     content = "  ".join(f"[{_get_tile_bg_style(t, jin_name or '')}]{t.name}[/]" for t in s)
-    return Panel(content, title="🃏 手牌", border_style="blue", padding=(0, 1))
+    return Panel(content, title=f"✋ 手牌 ({len(hand)}张)", border_style="blue", padding=(0, 1))
 
 def render_river(discards: List[Tile]) -> Panel:
     if not discards: return Panel("等待出牌...", title="🌊 牌河", border_style="green")
@@ -62,29 +62,48 @@ def render_river(discards: List[Tile]) -> Panel:
     return Panel(row, title="🌊 牌河", border_style="green")
 
 def render_flowers(flowers: List[Tile]) -> Panel:
-    if not flowers: return Panel("暂无", title="🌸 花牌", border_style="magenta")
-    return Panel("  ".join(f"[on grey82 magenta]{t.name}[/]" for t in flowers), title="🌸 补花区", border_style="magenta")
+    if not flowers: return Panel("暂无", title=f"🌸 花牌", border_style="magenta")
+    return Panel("  ".join(f"[on grey82 magenta]{t.name}[/]" for t in flowers), title=f"🌸 花牌 ({len(flowers)}张)", border_style="magenta")
 
-def render_melds(melds: List[List[Tile]], title: str = "🀂 副露区") -> Panel:
+def render_melds(melds: List[List[Tile]]) -> Panel:
     """渲染吃/碰/杠/暗杠区"""
     if not melds:
-        return Panel("暂无副露", title=title, border_style="grey50")
+        return Panel("暂无副露", title=f"📢 副露", border_style="grey50")
+    total_tiles = sum(len(group) for group in melds)
     rows = []
     for group in melds:
         row = "  ".join(f"[on grey23]{t.name}[/]" for t in group)
         rows.append(row)
-    return Panel("  |  ".join(rows), title=title, border_style="grey50")
+    return Panel("  |  ".join(rows), title=f"📢 副露 ({total_tiles}张)", border_style="grey50")
 
-def render_status(deck_rem: int, jin_name: str, turn: int, dealer: bool) -> Panel:
-    info = Text(f"回合: {turn}  |  墙余: {deck_rem}  |  ")
-    info.append("庄家" if dealer else "闲家", style="bold yellow" if dealer else "dim")
-    info.append(f"  |  金: {jin_name or '待定'}")
+def render_status(deck_rem: int, jin_name: str, current_turn_idx: int, dealer_idx: int) -> Panel:
+    seat_names = ["你", "AI1", "AI2", "AI3"]
+    curr_name = seat_names[current_turn_idx % 4]
+    dealer_name = seat_names[dealer_idx % 4]
+
+    info = Text(f"当前回合: {curr_name}  |  墙余: {deck_rem}  |  ")
+    # 🎯 明确显示庄家身份，并高亮
+    info.append(f"庄家: {dealer_name}", style="bold yellow")
+    info.append(f"  |  金: {jin_name or '待定'}", style="dim")
+    
     return Panel(info, title="📊 状态", border_style="yellow")
 
-def render_reveal_hand(hand: List[Tile], jin_name: Optional[str] = None, title: str = "手牌") -> Panel:
-    """渲染摊牌面板（带完整排序与花色背景）"""
-    s = _sort_tiles(hand, jin_name)
+def render_reveal_hand(hand: List[Tile], jin_name: Optional[str] = None, title: str = "手牌", 
+                       melds: Optional[List[List[Tile]]] = None, hide_flowers: bool = False) -> Panel:
+    """渲染摊牌面板（支持副露区 + 隐藏花牌）"""
+    from rule_sanming import HONOR_FLOWER_NAMES
+    
+    # 🚫 过滤花牌（用于AI摊牌时不显示花牌在手牌区）
+    display_hand = [t for t in hand if not (hide_flowers and t.name in HONOR_FLOWER_NAMES)]
+    s = _sort_tiles(display_hand, jin_name)
+    
     content = "  ".join(f"[{_get_tile_bg_style(t, jin_name or '')}]{t.name}[/]" for t in s)
+    
+    if melds:
+        for group in melds:
+            if content: content += "  |  "
+            content += "  ".join(f"[on grey23]{t.name}[/]" for t in group)
+    
     return Panel(content, title=title, border_style="cyan", padding=(0, 1))
 
 def render_game_log(logs: List[str], max_lines: int = 12) -> Panel:

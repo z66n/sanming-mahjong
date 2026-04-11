@@ -10,7 +10,7 @@ WIN_PRIORITY = {
 }
 
 SPECIAL_BASE_SCORE = {
-    "天胡": 30, "抢金": 30, "三金倒": 40, "金坎": 60, "金雀": 60,
+    "天胡": 30, "闲家抢金": 30, "庄家抢金": 30, "三金倒": 40, "金坎": 60, "金雀": 60,
     "金龙": 120, "混一色": 120, "清一色": 240
 }
 
@@ -197,8 +197,53 @@ class SanmingRule:
         if jokers >= 2:
             if self._can_form_melds(counts, jokers - 2): return True
         return False
+    
+    def check_initial_special_wins(self, hand: List[Tile], player_idx: int, dealer_idx: int, jin_tile: Tile) -> Dict:
+        """🎯 严格限定：仅开金后、庄家行动前检测 天胡/三金倒/抢金"""
+        if not jin_tile: return {"type": "无", "priority": 0}
 
-    def resolve_win(self, hand: List[Tile], win_tile: Optional[Tile], is_dealer: bool, is_self_draw: bool, num_melds: int = 0, can_qiang_jin: bool = False) -> Dict:
+        is_dealer = (player_idx == dealer_idx)
+        results = []
+
+        # 1. 天胡：仅庄家，且17张初始手牌不含金且自身已成型
+        if is_dealer and self._check_win_structure(
+            self._analyze_hand(hand)["normal_counts"],
+            self._analyze_hand(hand)["jokers"]
+        ):
+            results.append("天胡")
+
+        # 2. 三金倒：任意座位，初始手牌含 ≥3 张金
+        if sum(1 for t in hand if self.is_joker(t)) >= 3:
+            results.append("三金倒")
+
+        # 3. 抢金：任意座位，初始手牌 + 翻出的金 能成型
+        if is_dealer:
+            # 庄家抢金：17张中任意移除1张，剩余16张听金
+            for i in range(len(hand)):
+                temp_16 = hand[:i] + hand[i+1:]
+                # 检查 temp_16 + 金 是否成胡（等价于“听金”）
+                test_stats = self._analyze_hand(temp_16 + [jin_tile])
+                if self._check_win_structure(test_stats["normal_counts"], test_stats["jokers"]):
+                    results.append("庄家抢金")
+        else:
+            # 闲家抢金：16张手牌 + 翻出的金 直接成胡
+            test_stats = self._analyze_hand(hand + [jin_tile])
+            if self._check_win_structure(test_stats["normal_counts"], test_stats["jokers"]):
+                results.append("闲家抢金")
+
+        if not results:
+            return {"type": "无", "priority": 0}
+
+        # 🎯 自动取最高优先级（天胡10 > 三金倒9 > 闲家抢金8 > 庄家抢金7）
+        best = max(results, key=lambda x: WIN_PRIORITY[x])
+        return {
+            "type": best,
+            "priority": WIN_PRIORITY[best],
+            "special_score": SPECIAL_BASE_SCORE[best],
+            "is_pinghu": False
+        }
+
+    def resolve_win(self, hand: List[Tile], win_tile: Optional[Tile], is_dealer: bool, is_self_draw: bool, num_melds: int = 0) -> Dict:
         expected_len = 17 - 3 * num_melds
         if len(hand) != expected_len:
             return {"type": "无", "priority": 0, "special_score": 0, "is_pinghu": False}
@@ -206,28 +251,21 @@ class SanmingRule:
         stats = self._analyze_hand(hand)
         is_valid = self._check_win_structure(stats["normal_counts"], stats["jokers"])
 
-        results = []
-        if is_dealer and num_melds == 0 and is_valid: results.append("天胡")
-        if stats["jokers"] >= 3: results.append("三金倒")
-        
-        # 🔒 严格门控：仅开局阶段传入 can_qiang_jin=True 时才允许判定抢金
-        if can_qiang_jin and win_tile and self.is_joker(win_tile) and is_valid:
-            results.append("闲家抢金" if not is_dealer else "庄家抢金")
-            
-        if is_valid:
-            if stats["is_pure_one"]: results.append("清一色")
-            elif stats["is_mixed_one"]: results.append("混一色")
-            else: results.append("平胡")
-
-        if not results:
+        if not is_valid:
             return {"type": "无", "priority": 0, "special_score": 0, "is_pinghu": False}
+
+        results = []
+        # 🎯 仅保留局中常规牌型判定
+        if stats["is_pure_one"]: results.append("清一色")
+        elif stats["is_mixed_one"]: results.append("混一色")
+        else: results.append("平胡")
 
         best = max(results, key=lambda x: WIN_PRIORITY[x])
         return {
             "type": best,
             "priority": WIN_PRIORITY[best],
             "special_score": SPECIAL_BASE_SCORE.get(best, 0),
-            "is_pinghu": best in ("平胡", "抢金", "三金倒")
+            "is_pinghu": best in ("平胡",)  # ✅ 移除了抢金等特殊项
         }
 
     # ================= 计分公式 =================
@@ -261,21 +299,31 @@ class SanmingRule:
     def check_meld_options(self, hand: List[Tile], discard: Tile, is_next: bool, num_melds: int = 0) -> List[Dict]:
         """按优先级返回可执行动作，传入当前副露数"""
         opts = []
+        
+        # 🚫 金牌不能被吃/碰/明杠（但依然可以胡）
+        if self.is_joker(discard):
+            return [{"type": "过"}]
+        
         test_hand = hand + [discard]
         
-        # 1. 胡 (动态校验牌数)
+        # 1. 胡牌检测 (动态校验牌数)
         if len(test_hand) == 17 - 3 * num_melds:
             if self.resolve_win(test_hand, discard, False, False, num_melds)["priority"] > 0:
                 opts.append({"type": "胡"})
-                
-        counts = Counter(t.name for t in hand)
+        
+        # 🚫 手牌中的金牌不参与吃碰杠计数（金牌只能用于胡牌或做百搭，不能用于鸣牌）
+        counts = Counter(t.name for t in hand if not self.is_joker(t))
         d_name = discard.name
         
         # 2. 明杠 / 3. 碰
-        if counts.get(d_name, 0) == 3: opts.append({"type": "明杠"})
-        elif counts.get(d_name, 0) == 2: opts.append({"type": "碰"})
+        count = counts.get(d_name, 0)
+        if count == 3:
+            opts.append({"type": "明杠"})
+            opts.append({"type": "碰"})  # 🎯 核心修复：3张时同时开放碰的选项（留1张在手）
+        elif count == 2:
+            opts.append({"type": "碰"})
             
-        # 4. 吃
+        # 4. 吃 (仅数牌 + 上家)
         if is_next and discard.category == "suited":
             v, s = discard.value, discard.name[-1]
             combos = []
