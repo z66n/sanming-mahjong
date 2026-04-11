@@ -1,0 +1,32 @@
+name: Build Cross-Platform Executables
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with: { python-version: '3.11' }
+      
+    - name: Install dependencies
+      run: pip install pyinstaller rich
+      
+    - name: Build executable
+      run: |
+        pyinstaller --onefile --clean --name smmj_${{ matrix.os }} game_loop.py
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.os }}-build
+        path: dist/
