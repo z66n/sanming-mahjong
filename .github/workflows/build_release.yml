@@ -26,7 +26,7 @@ jobs:
         pyinstaller --onefile --clean --name smmj_${{ matrix.os }} game_loop.py
         
     - name: Upload artifact
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@v6
       with:
         name: ${{ matrix.os }}-build
         path: dist/
@@ -38,7 +38,7 @@ jobs:
     
     steps:
     - name: Download all artifacts
-      uses: actions/download-artifact@v5
+      uses: actions/download-artifact@v7
       with:
         path: artifacts/
         
