@@ -1,0 +1,52 @@
+name: Build Cross-Platform Executables and Create GitHub Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v5
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v6
+      with: { python-version: '3.11' }
+      
+    - name: Install dependencies
+      run: pip install pyinstaller rich
+      
+    - name: Build executable
+      run: |
+        pyinstaller --onefile --clean --name smmj_${{ matrix.os }} game_loop.py
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v5
+      with:
+        name: ${{ matrix.os }}-build
+        path: dist/
+    
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts/
+        
+    - name: Create Release & Upload Assets
+      uses: softprops/action-gh-release@v2
+      with:
+        name: "sanming-mahjong ${{ github.ref_name }}"
+        files: artifacts/*/*
+        draft: false
+        prerelease: false
+        generate_release_notes: true
