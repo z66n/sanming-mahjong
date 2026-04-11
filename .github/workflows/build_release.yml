@@ -45,7 +45,6 @@ jobs:
     - name: Create Release & Upload Assets
       uses: softprops/action-gh-release@v2
       with:
-        name: "sanming-mahjong ${{ github.ref_name }}"
         files: artifacts/*/*
         draft: false
         prerelease: false
