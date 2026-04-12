@@ -199,9 +199,10 @@ class SanmingGame:
             if p_idx == 0: self.last_drawn = tile.name
 
             # 2. 立即检查自摸
-            num_m = len(self.player_melds) if p_idx == 0 else len(self.ai_melds[p_idx-1])
+            melds = self.player_melds if p_idx == 0 else self.ai_melds[p_idx-1]
+            num_m = len(melds)
             is_dealer = (p_idx == self.dealer_idx)
-            res = self.rule.resolve_win(hand, tile, is_dealer, True, num_melds=num_m)
+            res = self.rule.resolve_win(hand, tile, is_dealer, True, num_melds=num_m, melds=melds)
 
             if res["priority"] > 0:
                 self._add_log(f"🎉 {name} 分张自摸！")
@@ -510,7 +511,7 @@ class SanmingGame:
                 # 🏆 1. 胡牌处理（游戏终结逻辑，独立分支直接返回）
                 if chosen["type"] == "胡":
                     win_res = self.rule.resolve_win(self.player_hand + [discard], discard, 
-                                                    (0 == self.dealer_idx), False, num_melds=num_m)
+                                                    (0 == self.dealer_idx), False, num_melds=num_m, melds=self.player_melds)
                     if win_res["priority"] > 0:
                         self.player_hand.append(discard)
                         self._declare_win(0, win_res, False)
@@ -561,7 +562,7 @@ class SanmingGame:
             combo_idx = 0
             # 🏆 1. 胡牌处理（终结逻辑，提前返回）
             if chosen["type"] == "胡":
-                win_res = self.rule.resolve_win(hand + [discard], discard, (p_idx == self.dealer_idx), False, num_melds=num_m)
+                win_res = self.rule.resolve_win(hand + [discard], discard, (p_idx == self.dealer_idx), False, num_melds=num_m, melds=self.ai_melds[p_idx-1])
                 if win_res["priority"] > 0:
                     hand.append(discard)
                     self._declare_win(p_idx, win_res, False)
