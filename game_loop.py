@@ -192,7 +192,7 @@ class SanmingGame:
                 tile = self.deck.draw()
 
             if not tile:
-                self._add_log("⚠️ 牌墙已空，提前结束分张。")
+                self._add_log("🔚 牌墙已空，提前结束分张。")
                 break
 
             hand.append(tile)
@@ -280,7 +280,7 @@ class SanmingGame:
             self.player_hand.remove(target)
             self.last_drawn = None
             self.discards.append(target)
-            self._add_log(f"📤 你打出: {target.name}")
+            self._add_log(f"👤 你打出: {target.name}")
             clear_screen(); self._render_screen()
             self._handle_global_interception(target, 0)
             return True
@@ -370,11 +370,11 @@ class SanmingGame:
         flw_list = self.player_flowers if p_idx == 0 else self.ai_flowers[p_idx-1]
 
         tile = self.deck.draw()
-        self._add_log((f"📥 你" if p_idx == 0 else f"🤖 AI{p_idx}") + " 摸牌") 
+        self._add_log((f"👤 你" if p_idx == 0 else f"🤖 AI{p_idx}") + " 摸牌") 
         while tile and tile.name in HONOR_FLOWER_NAMES:
             flw_list.append(tile)
             tile = self.deck.draw_from_dead()
-            self._add_log((f"📥 你" if p_idx == 0 else f"🤖 AI{p_idx}") + " 补花") 
+            self._add_log((f"👤 你" if p_idx == 0 else f"🤖 AI{p_idx}") + " 补花") 
 
         if tile:
             hand.append(tile)
@@ -406,7 +406,7 @@ class SanmingGame:
                             removed.append(t)
                             break
                 self.player_melds.append(removed)
-                self._add_log(f"🀂 你暗杠")
+                self._add_log(f"👤 你暗杠")
 
                 # 2. 🚨 立即从死墙补牌 + 递归补花
                 tile = self.deck.draw_from_dead()
@@ -420,7 +420,7 @@ class SanmingGame:
                     self.player_hand.append(tile)
                     self.last_drawn = tile.name
                 else:
-                    self._add_log("⚠️ 死墙已空，暗杠后无牌可补")
+                    self._add_log("🚫 死墙已空，暗杠后无牌可补")
 
                 # 3. 同步进入出牌阶段
                 self._prompt_discard_synchronous()
@@ -482,7 +482,7 @@ class SanmingGame:
 
         # 构建菜单：1.胡 2.明杠 3.碰 4.吃 5.过（动态过滤不可用项）
         menu_str = " / ".join(o["type"] for o in valid_opts)
-        console.print(f"\n⚡ 拦截权归属你 | 可选: {menu_str} / 过")
+        console.print(f"\n🛑 拦截权归属你 | 可选: {menu_str} / 过")
         console.print("  ".join(f"{i+1}.{o['type']}" for i, o in enumerate(valid_opts)) + f"  {len(valid_opts)+1}.过")
 
         try:
@@ -580,7 +580,7 @@ class SanmingGame:
     def _prompt_discard_synchronous(self):
         """鸣牌成功后，立即从手牌中打出一张（同步阻塞）"""
         jin_name = self.rule.jin_tile.name if self.rule.jin_tile else None
-        console.print("\n🃏 鸣牌成功，请打出一张牌:")
+        console.print("\n📢 鸣牌成功，请打出一张牌:")
         console.print(render_discard_prompt(self.player_hand, jin_name, self.last_drawn))
         
         target = None
@@ -598,13 +598,13 @@ class SanmingGame:
         
         if not target and self.player_hand:
             target = random.choice(self.player_hand)
-            self._add_log(f"⚠️ 出牌输入无效，随机打出: {target.name}")
+            self._add_log(f"❌ 出牌输入无效，随机打出: {target.name}")
 
         if target:
             self.player_hand.remove(target)
             self.last_drawn = None  # 清除新牌标记
             self.discards.append(target)
-            self._add_log(f"📤 你打出: {target.name}")
+            self._add_log(f"👤 你打出: {target.name}")
             clear_screen(); self._render_screen()
             # 打出后继续检查是否有其他人可拦截
             # ✅ 预设下一回合为玩家的下一家(AI1)
