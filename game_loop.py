@@ -39,7 +39,7 @@ class SanmingGame:
             self.game_log = self.game_log[-50:]
 
     def start_game(self):
-        console.print("[bold cyan]🧧 三明福州十六张麻将 v0.1.6[/bold cyan]")
+        console.print("[bold cyan]🧧 三明福州十六张麻将 v0.1.7[/bold cyan]")
         self.game_running = True
         while self.game_running:
             try: self._run_round()
@@ -242,8 +242,23 @@ class SanmingGame:
 
         # 自摸检测
         num_m = len(self.player_melds)
-        res = self.rule.resolve_win(hand, hand[-1] if hand else None, (0 == self.dealer_idx), True, num_melds=num_m)
+        res = self.rule.resolve_win(hand, hand[-1] if hand else None, 
+                                    (0 == self.dealer_idx), True, num_melds=num_m, melds=self.player_melds)
         if res["priority"] > 0:
+            # 🎯 拦截自动胡牌，提供“过”选项冲击特殊胡牌
+            if res["type"] in ("平胡", "金龙", "金雀", "混一色", "清一色"):
+                console.print(f"\n🎉 当前可胡牌: [bold yellow]{res['type']}[/bold yellow]！")
+                console.print("💡 提示：选择【过】可继续摸打，保留组装特殊胡牌的机会。")
+                console.print("1.胡牌  2.过(继续出牌)")
+                try:
+                    c = console.input("👉 选择: ").strip()
+                    if c == "2":
+                        console.print("⏭️ 放弃胡牌，继续回合...")
+                        return self._player_discard_phase(hand) # 跳过结算，进入出牌阶段
+                    elif c != "1":
+                        console.print("[dim]输入无效，默认胡牌[/dim]")
+                except: pass
+
             self._declare_win(0, res, True); self.game_running = False; return False
 
         return self._player_discard_phase(hand)
@@ -350,7 +365,8 @@ class SanmingGame:
 
         # AI 正常出牌
         num_m = len(self.ai_melds[p_idx-1])
-        res = self.rule.resolve_win(hand, hand[-1] if hand else None, (p_idx == self.dealer_idx), True, num_melds=num_m)
+        res = self.rule.resolve_win(hand, hand[-1] if hand else None, 
+                                    (p_idx == self.dealer_idx), True, num_melds=num_m, melds=self.ai_melds[p_idx-1])
         if res["priority"] > 0:
             clear_screen(); self._render_screen()
             self._declare_win(p_idx, res, True); self.game_running = False; return
@@ -457,7 +473,8 @@ class SanmingGame:
                 num_m = len(self.player_melds) if p_idx == 0 else len(self.ai_melds[p_idx-1])
                 is_next = (i == 1)
                 
-                opts = self.rule.check_meld_options(hand, discard, is_next, num_melds=num_m)
+                p_melds = self.player_melds if p_idx == 0 else self.ai_melds[p_idx-1]
+                opts = self.rule.check_meld_options(hand, discard, is_next, num_melds=num_m, melds=p_melds)
                 if any(o["type"] == act_type for o in opts):
                     winner_idx = p_idx
                     break

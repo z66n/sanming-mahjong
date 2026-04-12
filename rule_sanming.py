@@ -6,12 +6,12 @@ from tile import Tile
 # 📊 规则常量配置
 WIN_PRIORITY = {
     "天胡": 10, "三金倒": 9, "闲家抢金": 8, "庄家抢金": 7,
-    "清一色": 6, "混一色": 5, "金龙": 4, "金雀": 3, "平胡": 2, "无": 0
+    "清一色": 6, "混一色": 5, "金龙": 4, "金雀": 3, "金坎": 2, "平胡": 1, "无": 0
 }
 
 SPECIAL_BASE_SCORE = {
-    "天胡": 30, "闲家抢金": 30, "庄家抢金": 30, "三金倒": 40, "金坎": 60, "金雀": 60,
-    "金龙": 120, "混一色": 120, "清一色": 240
+    "天胡": 30, "三金倒": 40, "闲家抢金": 30, "庄家抢金": 30, 
+    "清一色": 240, "混一色": 120, "金龙": 120, "金雀": 60, "金坎": 60
 }
 
 HONOR_FLOWER_NAMES = {
@@ -34,7 +34,7 @@ class SanmingRule:
 
     # ================= 核心牌型分析 =================
     def _analyze_hand(self, hand: List[Tile]) -> Dict:
-        """统计手牌结构（修复 KeyError 并优化清混色判定）"""
+        """🔍 仅分析手牌内部结构（供听牌/AI/暗杠使用，不感知副露）"""
         jokers = 0
         flowers = 0
         suits = {"万": 0, "条": 0, "筒": 0}
@@ -52,14 +52,41 @@ class SanmingRule:
 
         # 仅统计实际存在的数牌花色
         active_suits = [s for s in ("万", "条", "筒") if suits[s] > 0]
-        has_jokers = jokers > 0
 
         return {
             "jokers": jokers,
             "flowers": flowers,
             "normal_counts": normal_counts,
-            "is_mixed_one": len(active_suits) == 1 and has_jokers,
-            "is_pure_one": len(active_suits) == 1 and not has_jokers,
+            "active_suits": active_suits
+        }
+    
+    def _analyze_full_state(self, hand: List[Tile], melds: List[List[Tile]]) -> Dict:
+        """🌍 合并手牌与副露进行全局分析（仅用于胡牌定档/清混色判定）"""
+        all_tiles = hand + [t for group in (melds or []) for t in group]
+        jokers = 0
+        flowers = 0
+        suits = {"万": 0, "条": 0, "筒": 0}
+        normal_counts = Counter()
+
+        for t in all_tiles:
+            if self.is_joker(t):
+                jokers += 1
+            elif t.category == "suited":
+                suits[t.name[-1]] += 1
+                normal_counts[t.name] += 1
+            elif t.name in HONOR_FLOWER_NAMES or t.category in ("wind", "dragon"):
+                # 字牌与花牌不计入花色，统一累加到花分统计
+                flowers += 1
+
+        # 仅统计实际存在的数牌花色
+        active_suits = [s for s in ("万", "条", "筒") if suits[s] > 0]
+
+        return {
+            "jokers": jokers,
+            "flowers": flowers,
+            "normal_counts": normal_counts,
+            "is_mixed_one": len(active_suits) == 1 and jokers > 0,
+            "is_pure_one": len(active_suits) == 1 and jokers == 0,
             "active_suits": active_suits
         }
 
@@ -98,36 +125,75 @@ class SanmingRule:
         return False
 
     def _is_ready_hand(self, hand: List[Tile]) -> bool:
-        """检测听牌/已成型 (17张=5面1将, 16张=4面2将 或 5面0将+1张)"""
+        """🔍 听牌检测：枚举将牌来源，验证剩余牌+金能否全组面子"""
         stats = self._analyze_hand(hand)
-        if not stats["normal_counts"] and stats["jokers"] >= 2:
-            return True  # 纯金将直接听
-            
-        # 枚举所有可能的将牌组合
-        for name, cnt in list(stats["normal_counts"].items()):
-            for pair_size in (2,):  # 三明通常以2张为将
-                if cnt >= pair_size:
-                    nc = stats["normal_counts"].copy()
-                    nc[name] -= pair_size
-                    if nc[name] == 0: del nc[name]
-                    if self._check_pinghu(nc, stats["jokers"]): return True
+        counts, jokers = stats["normal_counts"], stats["jokers"]
 
-        # 金做将
-        if stats["jokers"] >= 2:
-            if self._check_pinghu(stats["normal_counts"], stats["jokers"] - 2): return True
+        # 1️⃣ 普通牌作将 (常规听牌)
+        for name, cnt in counts.items():
+            if cnt >= 2:
+                nc = counts.copy()
+                nc[name] -= 2
+                if nc[name] == 0: del nc[name]
+                if self._check_pinghu(nc, jokers): return True
+
+        # 2️⃣ 金牌作将 (金雀/金将听牌)
+        if jokers >= 2:
+            if self._check_pinghu(counts, jokers - 2): return True
+
         return False
 
-    def _check_jinkan_wait(self, hand: List[Tile], win_tile: Optional[Tile]) -> bool:
-        """检测是否为金坎单吊 (单吊金牌)"""
-        if not win_tile or not self.is_joker(win_tile): return False
-        # 移除一张金，检查剩余牌是否只差一张金即可胡
-        test_hand = [t for t in hand if not self.is_joker(t)] + [t for t in hand if self.is_joker(t)][:len([t for t in hand if self.is_joker(t)])-1]
-        # 简单判定：手牌缺的刚好是金，且为单面听/坎张听
-        stats = self._analyze_hand(test_hand)
-        if stats["jokers"] == 0:
-            # 检查是否缺顺子中间或边张，且只能等金
-            return self._is_ready_hand(test_hand + [win_tile])
+    def _is_strict_jin_wait_shape(self, n1: str, n2: str, jin_name: str) -> bool:
+        """辅助：严格检测是否为单吊金坎的边/坎张形状"""
+        if n1[-1] != n2[-1] or n1[-1] != jin_name[-1]: return False # 必须同花色且同金花色
+        v1, v2 = int(n1[0]), int(n2[0])
+        v1, v2 = sorted([v1, v2])
+        
+        if v2 - v1 == 2:  # 坎张：2,4 单吊 3
+            return f"{v1+1}{n1[-1]}" == jin_name
+        if v2 - v1 == 1:  # 连张：仅允许边张单吊
+            if v1 == 1 and f"{v2+1}{n1[-1]}" == jin_name: return True  # 1,2 单吊 3
+            if v2 == 9 and f"{v1-1}{n1[-1]}" == jin_name: return True  # 8,9 单吊 7
+        return False  # 4,5 等3/6 属于两面听，排除
+    
+    def _is_single_wait_for_joker(self, hand: List[Tile], win_tile: Tile) -> bool:
+        """🎯 金坎判定：严格单吊金牌 (4面子 + 边/坎张搭子 只等金)"""
+        if not self.is_joker(win_tile): return False
+        
+        # 1. 移除胡掉的那张金
+        remaining = hand.copy()
+        removed = False
+        for i, t in enumerate(remaining):
+            if t.name == win_tile.name:
+                remaining.pop(i); removed = True; break
+        if not removed: return False
+
+        # 2. 金坎要求剩余牌中无其他金牌
+        stats = self._analyze_hand(remaining)
+        if stats["jokers"] > 0: return False
+
+        # 3. 尝试找出 4面子 + 2张搭子 的合法拆分
+        counts = stats["normal_counts"]
+        tile_names = [n for n, c in counts.items() for _ in range(c)]
+        
+        for i in range(len(tile_names)):
+            for j in range(i + 1, len(tile_names)):
+                pair = [tile_names[i], tile_names[j]]
+                rest_counts = counts.copy()
+                for n in pair:
+                    rest_counts[n] -= 1
+                    if rest_counts[n] == 0: del rest_counts[n]
+
+                # 若剩余牌能全组成面子，且这2张构成严格单吊金
+                if self._can_form_melds(rest_counts, 0):
+                    if self._is_strict_jin_wait_shape(pair[0], pair[1], win_tile.name):
+                        return True
         return False
+    
+    def _has_joker_pair(self, counts: Counter, jokers: int) -> bool:
+        """金雀辅助：验证是否可用2张金牌作将牌成型"""
+        if jokers < 2: return False
+        return self._can_form_melds(counts, jokers - 2)
 
     # ================= 胡牌判定与优先级 =================
     def _can_form_melds(self, counts: Counter, jokers: int) -> bool:
@@ -243,29 +309,44 @@ class SanmingRule:
             "is_pinghu": False
         }
 
-    def resolve_win(self, hand: List[Tile], win_tile: Optional[Tile], is_dealer: bool, is_self_draw: bool, num_melds: int = 0) -> Dict:
+    def resolve_win(self, hand: List[Tile], win_tile: Optional[Tile], is_dealer: bool, 
+                    is_self_draw: bool, num_melds: int = 0, melds: List[List[Tile]] = None) -> Dict:
         expected_len = 17 - 3 * num_melds
         if len(hand) != expected_len:
             return {"type": "无", "priority": 0, "special_score": 0, "is_pinghu": False}
 
-        stats = self._analyze_hand(hand)
+        # ✅ 纳入副露检查清/混一色
+        stats = self._analyze_full_state(hand, melds)
         is_valid = self._check_win_structure(stats["normal_counts"], stats["jokers"])
-
         if not is_valid:
             return {"type": "无", "priority": 0, "special_score": 0, "is_pinghu": False}
 
         results = []
-        # 🎯 仅保留局中常规牌型判定
+
+        # 1. 金坎 (严格单吊金牌)
+        if self._is_single_wait_for_joker(hand, win_tile):
+            results.append("金坎")
+        
+        # 2. 清/混一色 (基于全局牌色)
         if stats["is_pure_one"]: results.append("清一色")
         elif stats["is_mixed_one"]: results.append("混一色")
-        else: results.append("平胡")
+        
+        # 3. 金龙 (手牌共含3张金牌组成面子)
+        if stats["jokers"] == 3:
+            results.append("金龙")
+        
+        # 4. 金雀 (手牌共含2张金牌组成雀/将牌)
+        if self._has_joker_pair(stats["normal_counts"], stats["jokers"]):
+            results.append("金雀")
+        
+        # 5. 兜底平胡
+        results.append("平胡")
 
         best = max(results, key=lambda x: WIN_PRIORITY[x])
         return {
-            "type": best,
-            "priority": WIN_PRIORITY[best],
+            "type": best, "priority": WIN_PRIORITY[best],
             "special_score": SPECIAL_BASE_SCORE.get(best, 0),
-            "is_pinghu": best in ("平胡",)  # ✅ 移除了抢金等特殊项
+            "is_pinghu": best == "平胡", "is_jinkan": best == "金坎"
         }
 
     # ================= 计分公式 =================
@@ -296,7 +377,8 @@ class SanmingRule:
         counts = Counter(t.name for t in hand)
         return [name for name, cnt in counts.items() if cnt >= 4]
 
-    def check_meld_options(self, hand: List[Tile], discard: Tile, is_next: bool, num_melds: int = 0) -> List[Dict]:
+    def check_meld_options(self, hand: List[Tile], discard: Tile, is_next: bool, 
+                           num_melds: int = 0, melds: List[List[Tile]] = None) -> List[Dict]:
         """按优先级返回可执行动作，传入当前副露数"""
         opts = []
         
@@ -308,7 +390,7 @@ class SanmingRule:
         
         # 1. 胡牌检测 (动态校验牌数)
         if len(test_hand) == 17 - 3 * num_melds:
-            if self.resolve_win(test_hand, discard, False, False, num_melds)["priority"] > 0:
+            if self.resolve_win(test_hand, discard, False, False, num_melds, melds)["priority"] > 0:
                 opts.append({"type": "胡"})
         
         # 🚫 手牌中的金牌不参与吃碰杠计数（金牌只能用于胡牌或做百搭，不能用于鸣牌）
