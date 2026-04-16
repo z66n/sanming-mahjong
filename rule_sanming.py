@@ -190,27 +190,32 @@ class SanmingRule:
                         return True
         return False
     
-    def _has_joker_pair(self, counts: Counter, jokers: int) -> bool:
+    def _check_jinque(self, counts: Counter, jokers: int) -> bool:
         """金雀辅助：验证是否可用2张金牌作将牌成型"""
         if jokers < 2: return False
         return self._can_form_melds(counts, jokers - 2)
+    
+    def _check_jinlong(self, counts: Counter, jokers: int) -> bool:
+        """🎯 金龙判定：3金独立预留，剩余牌必须自成胡型"""
+        if jokers < 3: return False
+        # 扣掉3张金，检查剩余牌能否成型（允许用剩余的金，但这3张绝不参与拼搭）
+        return self._check_win_structure(counts, jokers - 3)
 
     # ================= 胡牌判定与优先级 =================
     def _can_form_melds(self, counts: Counter, jokers: int) -> bool:
-        """递归检测剩余牌+金能否全部组成面子（顺子/刻子）"""
-        if not counts:
-            return True  # 无自然牌即视为成型（总牌数已在外层校验）
-            
+        """严格递归：剩余牌+金能否全组成面子（顺/刻）"""
+        if jokers < 0: return False  # 🛡️ 防御负数金
+        if not counts: return True
+
         first = min(counts.keys())
         cnt = counts[first]
 
-        # 1. 自然刻子 (AAA)
+        # 🌲 优先尝试纯自然面子（不耗金，分支优先级最高）
         if cnt >= 3:
             nc = counts.copy(); nc[first] -= 3
             if nc[first] == 0: del nc[first]
             if self._can_form_melds(nc, jokers): return True
 
-        # 2. 自然顺子 (ABC)
         if first[0].isdigit():
             v, s = int(first[0]), first[1]
             n1, n2 = f"{v+1}{s}", f"{v+2}{s}"
@@ -221,30 +226,37 @@ class SanmingRule:
                     if nc.get(k, 0) == 0: nc.pop(k, None)
                 if self._can_form_melds(nc, jokers): return True
 
-        # 3. 金牌补牌逻辑
+        # 🃏 尝试用金补缺（按耗金数升序，保留更多金给后续）
         if jokers > 0:
-            # 3a. 金补刻子 (AA+金 / A+2金 / 3金)
+            # 补刻子：AA+金 / A+2金 / 3金
             for use_j in (1, 2, 3):
-                if jokers >= use_j and cnt >= (3 - use_j):
+                need = 3 - use_j
+                if jokers >= use_j and cnt >= need:
                     nc = counts.copy()
-                    if 3 - use_j > 0:
-                        nc[first] -= (3 - use_j)
+                    if need > 0:
+                        nc[first] -= need
                         if nc.get(first, 0) == 0: nc.pop(first, None)
                     if self._can_form_melds(nc, jokers - use_j): return True
 
-            # 3b. 金补顺子 (仅数牌，修复原版缺失的 A_金_C 和 A_B_金)
+            # 补顺子（仅数牌）：缺中/缺后/缺首
             if first[0].isdigit():
                 v, s = int(first[0]), first[1]
-                # 情况1: A + 金 + C (缺中间)
-                if v <= 7 and counts.get(f"{v+2}{s}", 0) > 0:
+                # A + 金 + C
+                if v <= 7 and counts.get(f"{v+2}{s}", 0) > 0 and jokers >= 1:
                     nc = counts.copy(); nc[first] -= 1; nc[f"{v+2}{s}"] -= 1
                     for k in (first, f"{v+2}{s}"):
                         if nc.get(k, 0) == 0: nc.pop(k, None)
                     if self._can_form_melds(nc, jokers - 1): return True
-                # 情况2: A + B + 金 (缺后张)
-                if v <= 7 and counts.get(f"{v+1}{s}", 0) > 0:
+                # A + B + 金
+                if v <= 7 and counts.get(f"{v+1}{s}", 0) > 0 and jokers >= 1:
                     nc = counts.copy(); nc[first] -= 1; nc[f"{v+1}{s}"] -= 1
                     for k in (first, f"{v+1}{s}"):
+                        if nc.get(k, 0) == 0: nc.pop(k, None)
+                    if self._can_form_melds(nc, jokers - 1): return True
+                # 金 + B + C
+                if v <= 8 and counts.get(f"{v+1}{s}", 0) > 0 and counts.get(f"{v+2}{s}", 0) > 0 and jokers >= 1:
+                    nc = counts.copy(); nc[f"{v+1}{s}"] -= 1; nc[f"{v+2}{s}"] -= 1
+                    for k in (f"{v+1}{s}", f"{v+2}{s}"):
                         if nc.get(k, 0) == 0: nc.pop(k, None)
                     if self._can_form_melds(nc, jokers - 1): return True
 
@@ -332,11 +344,11 @@ class SanmingRule:
         elif stats["is_mixed_one"]: results.append("混一色")
         
         # 3. 金龙 (手牌共含3张金牌组成面子)
-        if stats["jokers"] == 3:
+        if self._check_jinlong(stats["normal_counts"], stats["jokers"]):
             results.append("金龙")
         
         # 4. 金雀 (手牌共含2张金牌组成雀/将牌)
-        if self._has_joker_pair(stats["normal_counts"], stats["jokers"]):
+        if self._check_jinque(stats["normal_counts"], stats["jokers"]):
             results.append("金雀")
         
         # 5. 兜底平胡

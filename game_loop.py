@@ -39,7 +39,7 @@ class SanmingGame:
             self.game_log = self.game_log[-50:]
 
     def start_game(self):
-        console.print("[bold cyan]🧧 三明福州十六张麻将 v0.1.7[/bold cyan]")
+        console.print("[bold cyan]🧧 三明福州十六张麻将 v0.1.8[/bold cyan]")
         self.game_running = True
         while self.game_running:
             try: self._run_round()
