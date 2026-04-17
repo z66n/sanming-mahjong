@@ -39,7 +39,7 @@ class SanmingGame:
             self.game_log = self.game_log[-50:]
 
     def start_game(self):
-        console.print("[bold cyan]🧧 三明福州十六张麻将 v0.1.8[/bold cyan]")
+        console.print("[bold cyan]🧧 三明福州十六张麻将 v0.2.0[/bold cyan]")
         self.game_running = True
         while self.game_running:
             try: self._run_round()
@@ -49,25 +49,32 @@ class SanmingGame:
 
     def _run_round(self) -> None:
         self._init_round()
-        self.deck.setup_wall(*self.deck.roll_dice())
+        
+        # 1️⃣ 第一次掷骰：定墙头/分割点
+        d1, d2 = self.deck.roll_dice()
+        self.deck.setup_wall(d1, d2)
+        self._add_log(f"🎲 掷骰定墙头: {d1}+{d2} → 分割点已设定")
+        
         self._phase_deal()
         self._phase_initial_flowers()
 
+        # 2️⃣ 第二次掷骰：开金（补花完成后进行）
         while True:
-            d1, d2 = self.deck.roll_dice()
-            jin = self.deck.reveal_jin(d1, d2)
-            if not jin: break
+            k1, k2 = self.deck.roll_dice()
+            jin = self.deck.reveal_jin(k1, k2)
+            if not jin: break # 防越界保护
+            
             if jin.name in HONOR_FLOWER_NAMES:
                 self.player_flowers.append(jin)
                 self._add_log(f"🌸 翻出花牌 {jin.name} → 入庄家补花区，重新翻金...")
                 continue
             self.rule.set_jin(jin)
-            self._add_log(f"🎲 开金掷骰: {d1}+{d2}={d1+d2} → 金: {jin.name}")
+            self._add_log(f"🎲 开金掷骰: {k1}+{k2} → 金: {jin.name}")
             break
         time.sleep(1.5)
 
         if self._check_special_initial_wins():
-            self._show_round_end_reveal()  # ✅ 开局特殊胡牌也摊牌
+            self._show_round_end_reveal()
             self._phase_settlement()
             return
 
@@ -90,13 +97,22 @@ class SanmingGame:
         self._add_log("🔄 新一局开始，发牌中...")
 
     def _phase_deal(self):
+        # 🎯 骰子决定的头牌玩家先拿，随后逆时针轮转 (0→1→2→3)
+        start_p = self.deck.wall_start_player
+        deal_order = [(start_p + i) % 4 for i in range(4)]
         hands = [[], [], [], []]
-        for i in range(4):
-            count = 17 if i == self.dealer_idx else 16
-            for _ in range(count):
-                t = self.deck.draw()
-                if t: hands[i].append(t)
-                
+        
+        # 4轮发牌，每轮每人顺时针摸2墩(4张)
+        for _ in range(4):
+            for p in deal_order:
+                for _ in range(4):
+                    t = self.deck.draw()
+                    if t: hands[p].append(t)
+                    
+        # 庄家额外摸第17张（规则固定，无论头牌是谁）
+        t = self.deck.draw()
+        if t: hands[self.dealer_idx].append(t)
+
         self.player_hand = hands[0]
         self.ai_hands = hands[1:]
         self.current_turn = self.dealer_idx
@@ -104,16 +120,30 @@ class SanmingGame:
     def _phase_initial_flowers(self):
         self._add_log("🌸 开局集中补花...")
         changed = True
+        round_num = 0
+        
+        # 🔄 多轮循环：庄家开始 -> 逆时针下家 -> 循环直到无人补花
         while changed:
             changed = False
-            for p in range(4):
+            round_num += 1
+            for p in range(4): # 0(庄) -> 1(AI1) -> 2(AI2) -> 3(AI3)
                 hand = self.player_hand if p==0 else self.ai_hands[p-1]
                 flw = self.player_flowers if p==0 else self.ai_flowers[p-1]
+                
                 for t in list(hand):
                     if t.name in HONOR_FLOWER_NAMES:
-                        hand.remove(t); flw.append(t)
-                        new_t = self.deck.draw_from_dead()
-                        if new_t: hand.append(new_t); changed = True
+                        hand.remove(t)
+                        flw.append(t)
+                        # 🎯 规则3：从牌墙尾逆时针摸牌补花
+                        new_t = self.deck.draw_from_tail()
+                        if new_t: 
+                            hand.append(new_t)
+                            # 若补来的仍是花，本轮不处理，留到下一轮该玩家回合继续补
+                            if new_t.name in HONOR_FLOWER_NAMES: changed = True
+                        else:
+                            self._add_log("⚠️ 牌墙已空，停止补花")
+                            
+            if round_num > 5: break # 防死循环安全阀
             if changed: time.sleep(0.2)
 
     def _check_special_initial_wins(self) -> bool:
@@ -127,6 +157,8 @@ class SanmingGame:
                 # 🎯 核心修正：仅抢金允许将翻出的金纳入手牌，天胡/三金倒保持发牌原貌
                 if "抢金" in res["type"]:
                     h.append(jin)
+                    self.rule.jin_tile = None  # 🛠️ 必须清除规则实例中的全局引用
+                    jin = None
                     
                 # 开局特殊胜利统一按高倍率结算（is_zimo=True 触发 ×2 倍率，可按需调整）
                 self._declare_win(i, res, is_zimo=True)
@@ -219,18 +251,16 @@ class SanmingGame:
         self._add_log(f"🏁 分张完毕无人胡牌，荒庄流局，庄家连庄！")
         clear_screen(); self._render_screen()
         self.consecutive_dealer += 1
-        self._show_round_end_reveal()
-        self._phase_settlement()
 
     def _draw_kong_tile(self, p_idx: int):
-        """杠后专用：从死墙摸牌，遇花递归补花"""
+        """杠后专用：从墙尾摸牌，遇花递归补花"""
         hand = self.player_hand if p_idx == 0 else self.ai_hands[p_idx-1]
         flw_list = self.player_flowers if p_idx == 0 else self.ai_flowers[p_idx-1]
 
-        tile = self.deck.draw_from_dead()  # 杠从死墙抽
+        tile = self.deck.draw_from_tail()  # 杠从墙尾抽
         while tile and tile.name in HONOR_FLOWER_NAMES:
             flw_list.append(tile)
-            tile = self.deck.draw_from_dead()
+            tile = self.deck.draw_from_tail()
             
         if tile:
             hand.append(tile)
@@ -358,7 +388,7 @@ class SanmingGame:
                 self.ai_melds[p_idx-1].append(removed)
                 self._add_log(f"🤖 AI{p_idx} 暗杠")
                 
-                # 🆕 暗杠后必须同步执行：补死墙牌 → 立即出牌 → 设置下家
+                # 🆕 暗杠后必须同步执行：补墙尾牌 → 立即出牌 → 设置下家
                 self._draw_kong_tile(p_idx)
                 self._ai_discard_after_meld(p_idx)
                 # next_turn_override 已在 _ai_discard_after_meld 中设置
@@ -382,7 +412,7 @@ class SanmingGame:
             self._handle_global_interception(out, p_idx)
     
     def _draw_and_handle_flowers(self, p_idx: int):
-        """摸牌及自动补花循环（活墙抽牌 → 遇花去死墙补 → 递归至非花）"""
+        """摸牌及自动补花循环（墙头抽牌 → 遇花去墙尾补 → 递归至非花）"""
         hand = self.player_hand if p_idx == 0 else self.ai_hands[p_idx-1]
         flw_list = self.player_flowers if p_idx == 0 else self.ai_flowers[p_idx-1]
 
@@ -390,7 +420,7 @@ class SanmingGame:
         self._add_log((f"👤 你" if p_idx == 0 else f"🤖 AI{p_idx}") + " 摸牌") 
         while tile and tile.name in HONOR_FLOWER_NAMES:
             flw_list.append(tile)
-            tile = self.deck.draw_from_dead()
+            tile = self.deck.draw_from_tail()
             self._add_log((f"👤 你" if p_idx == 0 else f"🤖 AI{p_idx}") + " 补花") 
 
         if tile:
@@ -425,19 +455,19 @@ class SanmingGame:
                 self.player_melds.append(removed)
                 self._add_log(f"👤 你暗杠")
 
-                # 2. 🚨 立即从死墙补牌 + 递归补花
-                tile = self.deck.draw_from_dead()
+                # 2. 🚨 立即从墙尾补牌 + 递归补花
+                tile = self.deck.draw_from_tail()
                 self._add_log(f"📥 暗杠补牌")
                 while tile and tile.name in HONOR_FLOWER_NAMES:
                     self.player_flowers.append(tile)
                     self._add_log(f"🌸 补花")
-                    tile = self.deck.draw_from_dead()
+                    tile = self.deck.draw_from_tail()
 
                 if tile:
                     self.player_hand.append(tile)
                     self.last_drawn = tile.name
                 else:
-                    self._add_log("🚫 死墙已空，暗杠后无牌可补")
+                    self._add_log("🚫 墙尾已空，暗杠后无牌可补")
 
                 # 3. 同步进入出牌阶段
                 self._prompt_discard_synchronous()
@@ -457,6 +487,11 @@ class SanmingGame:
         if not success: return False
         
         melds.append(group)
+
+        # 核心修复：牌被副露后，必须从公共牌河中移除，否则统计会重复
+        if discard in self.discards:
+            self.discards.remove(discard)
+        
         self._add_log(f"✅ {'你' if player_idx==0 else f'AI{player_idx}'} 执行: {action_opt['type']}")
         self.last_drawn = None  # 鸣牌后新牌标记清除
         return True
@@ -514,6 +549,8 @@ class SanmingGame:
                                                     (0 == self.dealer_idx), False, num_melds=num_m, melds=self.player_melds)
                     if win_res["priority"] > 0:
                         self.player_hand.append(discard)
+                        if discard in self.discards:
+                            self.discards.remove(discard)  # 🛠️ 补充：点炮牌从牌河剔除
                         self._declare_win(0, win_res, False)
                         self.game_running = False
                     else:
@@ -533,7 +570,7 @@ class SanmingGame:
 
                 # 执行副露动作
                 if self._execute_meld_flow(0, discard, chosen, combo_idx):
-                    # 明杠专属：立即从死墙补牌
+                    # 明杠专属：立即从墙尾补牌
                     if chosen["type"] == "明杠":
                         self._draw_kong_tile(0)
                     
@@ -565,13 +602,15 @@ class SanmingGame:
                 win_res = self.rule.resolve_win(hand + [discard], discard, (p_idx == self.dealer_idx), False, num_melds=num_m, melds=self.ai_melds[p_idx-1])
                 if win_res["priority"] > 0:
                     hand.append(discard)
+                    if discard in self.discards:
+                        self.discards.remove(discard)  # 🛠️ 补充：AI点炮同样需剔除
                     self._declare_win(p_idx, win_res, False)
                     self.game_running = False
                 return  # ✅ 无论是否实际胡牌，AI拦截分支到此结束
             # 🀄 2. 副露处理（吃/碰/明杠统一收口）
             if self._execute_meld_flow(p_idx, discard, chosen, combo_idx):
                 if chosen["type"] == "明杠":
-                    self._draw_kong_tile(p_idx)  # 🆕 AI 立即补死墙牌
+                    self._draw_kong_tile(p_idx)  # 🆕 AI 立即补墙尾牌
                 self._ai_discard_after_meld(p_idx)  # 🆕 统一走 AI 跟打逻辑
 
     def _ai_discard_after_meld(self, p_idx: int):
@@ -653,8 +692,47 @@ class SanmingGame:
             self.consecutive_dealer = 0
             self._add_log("🔄 庄家轮换至下家。")
 
+    def _check_tile_count_conservation(self):
+        """🃏 牌数守恒校验：牌河 + 玩家手牌/副露/花牌 + AI手牌/副露/花牌 + 牌墙 = 144"""
+        all_tracked = set()
+        for lst in [self.discards, self.player_hand, self.player_flowers, 
+                    *[g for gs in self.player_melds for g in gs],
+                    *[t for h in self.ai_hands for t in h],
+                    *[f for fs in self.ai_flowers for f in fs],
+                    *[m for gs in self.ai_melds for g in gs for m in g]]:
+            if id(lst) in all_tracked:
+                console.print(f"[bold red]🐛 发现重复引用: {lst.name}[/]")
+            all_tracked.add(id(lst))
+        if self.rule.jin_tile and id(self.rule.jin_tile) in all_tracked:
+            console.print("[bold red]🐛 金牌与其他区域重叠！[/]")
+        
+        # 🐞 精确守恒校验
+        discards_in_river = len(self.discards)
+        jin_count = 1 if self.rule.jin_tile else 0
+        
+        p_h = len(self.player_hand)
+        p_m = sum(len(g) for g in self.player_melds)
+        p_f = len(self.player_flowers)
+        
+        ai_total = sum(
+            len(self.ai_hands[i]) + sum(len(g) for g in self.ai_melds[i]) + len(self.ai_flowers[i])
+            for i in range(3)
+        )
+        
+        wall_rem = self.deck.remaining
+        
+        total = discards_in_river + jin_count + p_h + p_m + p_f + ai_total + wall_rem
+        
+        console.print(f"📊 [debug] 牌河:{discards_in_river} | 金:{jin_count} | 玩家({p_h}手/{p_m}副/{p_f}花) | AI:{ai_total} | 牌墙:{wall_rem}")
+        if total != 144:
+            console.print(f"[bold red]🚨 牌数异常！总计 {total} 张 (期望 144)，差 {total-144} 张[/bold red]")
+        else:
+            console.print("[bold green]✅ 牌数守恒校验通过 (144/144)[/bold green]")
+
     def _show_round_end_reveal(self):
         """本局结束，展示所有玩家手牌"""
+        # self._check_tile_count_conservation()  # 🐞 每局结束强制执行牌数守恒校验，及时捕捉异常
+
         console.print("[bold yellow]🔚 本局结束，所有玩家摊牌：[/bold yellow]")
         jin_name = self.rule.jin_tile.name if self.rule.jin_tile else ""
         from cli_ui import render_reveal_hand

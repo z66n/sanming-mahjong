@@ -203,62 +203,69 @@ class SanmingRule:
 
     # ================= 胡牌判定与优先级 =================
     def _can_form_melds(self, counts: Counter, jokers: int) -> bool:
-        """严格递归：剩余牌+金能否全组成面子（顺/刻）"""
-        if jokers < 0: return False  # 🛡️ 防御负数金
+        """严格递归：剩余牌+金能否全组成面子（顺/刻），修复顺子位置盲区"""
+        if jokers < 0: return False
         if not counts: return True
 
         first = min(counts.keys())
         cnt = counts[first]
+        v, s = int(first[0]), first[1]
 
-        # 🌲 优先尝试纯自然面子（不耗金，分支优先级最高）
-        if cnt >= 3:
-            nc = counts.copy(); nc[first] -= 3
-            if nc[first] == 0: del nc[first]
-            if self._can_form_melds(nc, jokers): return True
-
-        if first[0].isdigit():
-            v, s = int(first[0]), first[1]
-            n1, n2 = f"{v+1}{s}", f"{v+2}{s}"
-            if counts.get(n1, 0) > 0 and counts.get(n2, 0) > 0:
+        # 1️⃣ 尝试刻子 (AAA)
+        for use_j in range(min(3, jokers) + 1):
+            need = 3 - use_j
+            if cnt >= need:
                 nc = counts.copy()
-                nc[first] -= 1; nc[n1] -= 1; nc[n2] -= 1
-                for k in (first, n1, n2):
-                    if nc.get(k, 0) == 0: nc.pop(k, None)
-                if self._can_form_melds(nc, jokers): return True
+                if need > 0:
+                    nc[first] -= need
+                    if nc.get(first, 0) == 0: nc.pop(first, None)
+                if self._can_form_melds(nc, jokers - use_j): return True
 
-        # 🃏 尝试用金补缺（按耗金数升序，保留更多金给后续）
-        if jokers > 0:
-            # 补刻子：AA+金 / A+2金 / 3金
-            for use_j in (1, 2, 3):
-                need = 3 - use_j
-                if jokers >= use_j and cnt >= need:
-                    nc = counts.copy()
-                    if need > 0:
-                        nc[first] -= need
-                        if nc.get(first, 0) == 0: nc.pop(first, None)
-                    if self._can_form_melds(nc, jokers - use_j): return True
+        # 2️⃣ 尝试顺子 (仅数牌)
+        if first[0].isdigit() and v <= 7:
+            n1, n2 = f"{v+1}{s}", f"{v+2}{s}"
+            c1, c2 = counts.get(n1, 0), counts.get(n2, 0)
 
-            # 补顺子（仅数牌）：缺中/缺后/缺首
-            if first[0].isdigit():
-                v, s = int(first[0]), first[1]
-                # A + 金 + C
-                if v <= 7 and counts.get(f"{v+2}{s}", 0) > 0 and jokers >= 1:
-                    nc = counts.copy(); nc[first] -= 1; nc[f"{v+2}{s}"] -= 1
-                    for k in (first, f"{v+2}{s}"):
-                        if nc.get(k, 0) == 0: nc.pop(k, None)
-                    if self._can_form_melds(nc, jokers - 1): return True
-                # A + B + 金
-                if v <= 7 and counts.get(f"{v+1}{s}", 0) > 0 and jokers >= 1:
-                    nc = counts.copy(); nc[first] -= 1; nc[f"{v+1}{s}"] -= 1
-                    for k in (first, f"{v+1}{s}"):
-                        if nc.get(k, 0) == 0: nc.pop(k, None)
-                    if self._can_form_melds(nc, jokers - 1): return True
-                # 金 + B + C
-                if v <= 8 and counts.get(f"{v+1}{s}", 0) > 0 and counts.get(f"{v+2}{s}", 0) > 0 and jokers >= 1:
-                    nc = counts.copy(); nc[f"{v+1}{s}"] -= 1; nc[f"{v+2}{s}"] -= 1
-                    for k in (f"{v+1}{s}", f"{v+2}{s}"):
-                        if nc.get(k, 0) == 0: nc.pop(k, None)
-                    if self._can_form_melds(nc, jokers - 1): return True
+            # 2.1 first 作为顺子第1张: first + n1 + n2 (可缺0~2张用金补)
+            if jokers >= 0:
+                # 全自然
+                if c1 > 0 and c2 > 0:
+                    nc = counts.copy(); nc[first]-=1; nc[n1]-=1; nc[n2]-=1
+                    for t in (first, n1, n2):
+                        if nc.get(t, 0) == 0: nc.pop(t, None)
+                    if self._can_form_melds(nc, jokers): return True
+                # 缺1张
+                if jokers >= 1:
+                    if c1 > 0: # first + n1 + 金
+                        nc = counts.copy(); nc[first]-=1; nc[n1]-=1
+                        for t in (first, n1):
+                            if nc.get(t, 0) == 0: nc.pop(t, None)
+                        if self._can_form_melds(nc, jokers-1): return True
+                    if c2 > 0: # first + 金 + n2
+                        nc = counts.copy(); nc[first]-=1; nc[n2]-=1
+                        for t in (first, n2):
+                            if nc.get(t, 0) == 0: nc.pop(t, None)
+                        if self._can_form_melds(nc, jokers-1): return True
+                # 缺2张
+                if jokers >= 2:
+                    nc = counts.copy(); nc[first]-=1
+                    if nc.get(first, 0) == 0: nc.pop(first, None)
+                    if self._can_form_melds(nc, jokers-2): return True
+
+        # 3️⃣ first 作为顺子第2张: (first-1) + first + (first+1) [缺 first-1，需1金]
+        if first[0].isdigit() and v >= 2 and v+1 <= 9 and jokers >= 1:
+            n_prev, n_next = f"{v-1}{s}", f"{v+1}{s}"
+            if counts.get(n_next, 0) > 0:
+                nc = counts.copy(); nc[first]-=1; nc[n_next]-=1
+                for t in (first, n_next):
+                    if nc.get(t, 0) == 0: nc.pop(t, None)
+                if self._can_form_melds(nc, jokers-1): return True
+
+        # 4️⃣ first 作为顺子第3张: (first-2) + (first-1) + first [缺前两张，需2金]
+        if first[0].isdigit() and v >= 3 and jokers >= 2:
+            nc = counts.copy(); nc[first]-=1
+            if nc.get(first, 0) == 0: nc.pop(first, None)
+            if self._can_form_melds(nc, jokers-2): return True
 
         return False
 
@@ -334,6 +341,10 @@ class SanmingRule:
             return {"type": "无", "priority": 0, "special_score": 0, "is_pinghu": False}
 
         results = []
+
+        # 0. 三金倒 (手牌含 ≥3 张金)
+        if sum(1 for t in hand if self.is_joker(t)) >= 3:
+            results.append("三金倒")
 
         # 1. 金坎 (严格单吊金牌)
         if self._is_single_wait_for_joker(hand, win_tile):
