@@ -551,6 +551,7 @@ class SanmingGame:
                         self.player_hand.append(discard)
                         if discard in self.discards:
                             self.discards.remove(discard)  # 🛠️ 补充：点炮牌从牌河剔除
+                        clear_screen(); self._render_screen()
                         self._declare_win(0, win_res, False)
                         self.game_running = False
                     else:
@@ -570,6 +571,7 @@ class SanmingGame:
 
                 # 执行副露动作
                 if self._execute_meld_flow(0, discard, chosen, combo_idx):
+                    clear_screen(); self._render_screen()
                     # 明杠专属：立即从墙尾补牌
                     if chosen["type"] == "明杠":
                         self._draw_kong_tile(0)
@@ -604,11 +606,13 @@ class SanmingGame:
                     hand.append(discard)
                     if discard in self.discards:
                         self.discards.remove(discard)  # 🛠️ 补充：AI点炮同样需剔除
+                    clear_screen(); self._render_screen()
                     self._declare_win(p_idx, win_res, False)
                     self.game_running = False
                 return  # ✅ 无论是否实际胡牌，AI拦截分支到此结束
             # 🀄 2. 副露处理（吃/碰/明杠统一收口）
             if self._execute_meld_flow(p_idx, discard, chosen, combo_idx):
+                clear_screen(); self._render_screen()
                 if chosen["type"] == "明杠":
                     self._draw_kong_tile(p_idx)  # 🆕 AI 立即补墙尾牌
                 self._ai_discard_after_meld(p_idx)  # 🆕 统一走 AI 跟打逻辑
