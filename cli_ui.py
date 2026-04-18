@@ -160,10 +160,10 @@ def render_ai_melds_flowers(ai_melds: List[List[List[Tile]]], ai_flowers: List[L
         )
 
     # 2️⃣ 使用 Group 垂直堆叠
-    layout = Group(*sub_panels)
+    group = Group(*sub_panels)
 
     # 3️⃣ 包裹外层 Panel 返回
-    return Panel(layout, title="🤖 AI 副露", border_style="grey50", height=14)
+    return Panel(group, title="🤖 AI 副露", border_style="grey50", height=14)
 
 __all__ = ["clear_screen", "render_discard_prompt", "render_hand", "render_river", 
            "render_status", "render_flowers", "render_melds", "_sort_tiles", "render_reveal_hand", "render_game_log", "render_ai_melds_flowers"]
