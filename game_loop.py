@@ -2,6 +2,7 @@
 import os, time, random
 from typing import List, Optional, Dict
 from collections import Counter
+from rich.columns import Columns
 from rich.console import Console
 from tile import Deck, Tile
 from rule_sanming import SanmingRule, HONOR_FLOWER_NAMES
@@ -157,8 +158,6 @@ class SanmingGame:
                 # 🎯 核心修正：仅抢金允许将翻出的金纳入手牌，天胡/三金倒保持发牌原貌
                 if "抢金" in res["type"]:
                     h.append(jin)
-                    self.rule.jin_tile = None  # 🛠️ 必须清除规则实例中的全局引用
-                    jin = None
                     
                 # 开局特殊胜利统一按高倍率结算（is_zimo=True 触发 ×2 倍率，可按需调整）
                 self._declare_win(i, res, is_zimo=True)
@@ -491,6 +490,7 @@ class SanmingGame:
         # 核心修复：牌被副露后，必须从公共牌河中移除，否则统计会重复
         if discard in self.discards:
             self.discards.remove(discard)
+        clear_screen(); self._render_screen()
         
         self._add_log(f"✅ {'你' if player_idx==0 else f'AI{player_idx}'} 执行: {action_opt['type']}")
         self.last_drawn = None  # 鸣牌后新牌标记清除
@@ -571,7 +571,6 @@ class SanmingGame:
 
                 # 执行副露动作
                 if self._execute_meld_flow(0, discard, chosen, combo_idx):
-                    clear_screen(); self._render_screen()
                     # 明杠专属：立即从墙尾补牌
                     if chosen["type"] == "明杠":
                         self._draw_kong_tile(0)
@@ -612,7 +611,6 @@ class SanmingGame:
                 return  # ✅ 无论是否实际胡牌，AI拦截分支到此结束
             # 🀄 2. 副露处理（吃/碰/明杠统一收口）
             if self._execute_meld_flow(p_idx, discard, chosen, combo_idx):
-                clear_screen(); self._render_screen()
                 if chosen["type"] == "明杠":
                     self._draw_kong_tile(p_idx)  # 🆕 AI 立即补墙尾牌
                 self._ai_discard_after_meld(p_idx)  # 🆕 统一走 AI 跟打逻辑
@@ -697,32 +695,47 @@ class SanmingGame:
             self._add_log("🔄 庄家轮换至下家。")
 
     def _check_tile_count_conservation(self):
-        """🃏 牌数守恒校验：牌河 + 玩家手牌/副露/花牌 + AI手牌/副露/花牌 + 牌墙 = 144"""
-        all_tracked = set()
-        for lst in [self.discards, self.player_hand, self.player_flowers, 
-                    *[g for gs in self.player_melds for g in gs],
-                    *[t for h in self.ai_hands for t in h],
-                    *[f for fs in self.ai_flowers for f in fs],
-                    *[m for gs in self.ai_melds for g in gs for m in g]]:
-            if id(lst) in all_tracked:
-                console.print(f"[bold red]🐛 发现重复引用: {lst.name}[/]")
-            all_tracked.add(id(lst))
-        if self.rule.jin_tile and id(self.rule.jin_tile) in all_tracked:
-            console.print("[bold red]🐛 金牌与其他区域重叠！[/]")
-        
-        # 🐞 精确守恒校验
+        """🃏 牌数守恒校验：保留重叠检测 + 动态追踪金牌去向"""
+        allocated_ids = set()
+        overlap_detected = False
+
+        def _track_region(region_name: str, tiles):
+            nonlocal overlap_detected
+            for t in tiles:
+                tid = id(t)
+                if tid in allocated_ids:
+                    console.print(f"[bold red]🐛 区域冲突 [{region_name}]: 牌 {t.name} 重复分配！[/]")
+                    overlap_detected = True
+                allocated_ids.add(tid)
+
+        # 📦 按区域追踪，精准定位冲突来源
+        _track_region("牌河", self.discards)
+        _track_region("玩家手牌", self.player_hand)
+        _track_region("玩家花牌", self.player_flowers)
+        for i, gs in enumerate(self.player_melds): _track_region(f"玩家副露组{i}", gs)
+        for i, h in enumerate(self.ai_hands): _track_region(f"AI{i+1}手牌", h)
+        for i, fs in enumerate(self.ai_flowers): _track_region(f"AI{i+1}花牌", fs)
+        for i, gs in enumerate(self.ai_melds):
+            for j, g in enumerate(gs): _track_region(f"AI{i+1}副露组{j}", g)
+
+        # 🎯 动态判断金牌是否独立存在（不修改 self.rule.jin_tile）
+        jin_count = 0
+        if self.rule.jin_tile:
+            if id(self.rule.jin_tile) not in allocated_ids:
+                jin_count = 1  # 仍在牌桌/墙边，独立计数
+            else:
+                # 已抢金或纳入手牌，不重复计数，但保留原始引用供 UI/规则使用
+                console.print("[dim]💡 金牌已入玩家区域，校验时自动豁免重复计数[/dim]")
+
+        # 📊 精确统计
         discards_in_river = len(self.discards)
-        jin_count = 1 if self.rule.jin_tile else 0
-        
         p_h = len(self.player_hand)
         p_m = sum(len(g) for g in self.player_melds)
         p_f = len(self.player_flowers)
-        
         ai_total = sum(
             len(self.ai_hands[i]) + sum(len(g) for g in self.ai_melds[i]) + len(self.ai_flowers[i])
             for i in range(3)
         )
-        
         wall_rem = self.deck.remaining
         
         total = discards_in_river + jin_count + p_h + p_m + p_f + ai_total + wall_rem
@@ -732,6 +745,8 @@ class SanmingGame:
             console.print(f"[bold red]🚨 牌数异常！总计 {total} 张 (期望 144)，差 {total-144} 张[/bold red]")
         else:
             console.print("[bold green]✅ 牌数守恒校验通过 (144/144)[/bold green]")
+            
+        return not overlap_detected
 
     def _show_round_end_reveal(self):
         """本局结束，展示所有玩家手牌"""
@@ -750,7 +765,7 @@ class SanmingGame:
         # 🤖 AI 摊牌：显示手牌+副露，花牌单独显示
         for i, ai_h in enumerate(self.ai_hands, 1):
             console.print(render_reveal_hand(
-                ai_h, jin_name, f"🤖 AI {i} 手牌 ({len(self.ai_hands[i-1]) + sum(len(group) for group in self.ai_melds[i-1])}张, {len(self.ai_flowers[i-1])}🌸)", 
+                ai_h, jin_name, f"🤖 AI{i} 手牌 ({len(self.ai_hands[i-1]) + sum(len(group) for group in self.ai_melds[i-1])}张, {len(self.ai_flowers[i-1])}🌸)", 
                 melds=self.ai_melds[i-1], hide_flowers=True
             ))
 
@@ -762,7 +777,7 @@ class SanmingGame:
         jin = self.rule.jin_tile.name if self.rule.jin_tile else "未开"
         console.print(render_status(self.deck.remaining, jin, self.current_turn, self.dealer_idx))
         console.print(render_river(self.discards))
-        console.print(render_game_log(self.game_log))
+        console.print(Columns([render_game_log(self.game_log), render_ai_melds_flowers(self.ai_melds, self.ai_flowers)], expand = True))
         console.print(render_hand(self.player_hand, jin))
         console.print(render_melds(self.player_melds))
         console.print(render_flowers(self.player_flowers))

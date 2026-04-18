@@ -1,9 +1,10 @@
 # cli_ui.py
 import os
 from typing import List, Optional
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
+from rich.columns import Columns
 from tile import Tile
 
 console = Console()
@@ -68,7 +69,7 @@ def render_flowers(flowers: List[Tile]) -> Panel:
 def render_melds(melds: List[List[Tile]]) -> Panel:
     """渲染吃/碰/杠/暗杠区"""
     if not melds:
-        return Panel("暂无副露", title=f"📢 副露", border_style="grey50")
+        return Panel("暂无", title=f"📢 副露", border_style="grey50")
     total_tiles = sum(len(group) for group in melds)
     rows = []
     for group in melds:
@@ -134,7 +135,35 @@ def render_game_log(logs: List[str], max_lines: int = 12) -> Panel:
         
         text.append(log + "\n", style=style)
     
-    return Panel(text, title="📜 事件日志", border_style="grey50", padding=(0, 1))
+    return Panel(text, title="📜 事件日志", border_style="grey50", padding=(0, 1), height=14)
+
+def render_ai_melds_flowers(ai_melds: List[List[List[Tile]]], ai_flowers: List[List[Tile]]) -> Panel:
+    """渲染所有AI的副露区与花牌计数（自动等宽并排）"""
+    sub_panels = []
+    
+    # 1️⃣ 为每位 AI 生成独立子 Panel
+    for i in range(len(ai_melds)):  # 兼容 3位或更多 AI
+        melds = ai_melds[i]
+        flw_cnt = len(ai_flowers[i])
+        title = f"AI{i+1} ({flw_cnt}🌸)"
+
+        if not melds:
+            content = "暂无"
+        else:
+            content = " | ".join(
+                " ".join(f"[on grey23]{t.name}[/]" for t in group)
+                for group in melds
+            )
+
+        sub_panels.append(
+            Panel(content, title=title, border_style="grey50", padding=(0, 1))
+        )
+
+    # 2️⃣ 使用 Group 垂直堆叠
+    layout = Group(*sub_panels)
+
+    # 3️⃣ 包裹外层 Panel 返回
+    return Panel(layout, title="🤖 AI 副露", border_style="grey50", height=14)
 
 __all__ = ["clear_screen", "render_discard_prompt", "render_hand", "render_river", 
-           "render_status", "render_flowers", "render_melds", "_sort_tiles", "render_reveal_hand", "render_game_log"]
+           "render_status", "render_flowers", "render_melds", "_sort_tiles", "render_reveal_hand", "render_game_log", "render_ai_melds_flowers"]

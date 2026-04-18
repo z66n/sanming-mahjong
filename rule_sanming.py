@@ -330,39 +330,36 @@ class SanmingRule:
 
     def resolve_win(self, hand: List[Tile], win_tile: Optional[Tile], is_dealer: bool, 
                     is_self_draw: bool, num_melds: int = 0, melds: List[List[Tile]] = None) -> Dict:
+        # 1️⃣ 基础长度校验（副露每1组减少3张手牌）
         expected_len = 17 - 3 * num_melds
         if len(hand) != expected_len:
             return {"type": "无", "priority": 0, "special_score": 0, "is_pinghu": False}
 
-        # ✅ 纳入副露检查清/混一色
-        stats = self._analyze_full_state(hand, melds)
-        is_valid = self._check_win_structure(stats["normal_counts"], stats["jokers"])
-        if not is_valid:
+        # 2️⃣ 仅分析手牌内部结构（用于胡牌型、金龙、金雀、金坎、基础平胡）
+        hand_stats = self._analyze_hand(hand)
+        if self._check_win_structure(hand_stats["normal_counts"], hand_stats["jokers"]) is False:
             return {"type": "无", "priority": 0, "special_score": 0, "is_pinghu": False}
 
         results = []
 
-        # 0. 三金倒 (手牌含 ≥3 张金)
-        if sum(1 for t in hand if self.is_joker(t)) >= 3:
+        # 🟢 手牌限定役：仅依赖 hand_stats，副露不参与
+        if hand_stats["jokers"] >= 3:
             results.append("三金倒")
-
-        # 1. 金坎 (严格单吊金牌)
         if self._is_single_wait_for_joker(hand, win_tile):
             results.append("金坎")
-        
-        # 2. 清/混一色 (基于全局牌色)
-        if stats["is_pure_one"]: results.append("清一色")
-        elif stats["is_mixed_one"]: results.append("混一色")
-        
-        # 3. 金龙 (手牌共含3张金牌组成面子)
-        if self._check_jinlong(stats["normal_counts"], stats["jokers"]):
+        if self._check_jinlong(hand_stats["normal_counts"], hand_stats["jokers"]):
             results.append("金龙")
-        
-        # 4. 金雀 (手牌共含2张金牌组成雀/将牌)
-        if self._check_jinque(stats["normal_counts"], stats["jokers"]):
+        if self._check_jinque(hand_stats["normal_counts"], hand_stats["jokers"]):
             results.append("金雀")
-        
-        # 5. 兜底平胡
+
+        # 🔵 全局成形役：必须合并副露，依赖 full_stats
+        full_stats = self._analyze_full_state(hand, melds)
+        if full_stats["is_pure_one"]:
+            results.append("清一色")
+        elif full_stats["is_mixed_one"]:
+            results.append("混一色")
+
+        # 🟡 兜底
         results.append("平胡")
 
         best = max(results, key=lambda x: WIN_PRIORITY[x])
